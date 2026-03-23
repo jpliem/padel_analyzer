@@ -1,0 +1,20 @@
+# Core Computer Vision
+opencv-python
+numpy
+torch
+torchvision
+ultralytics  # YOLOv8
+
+# Tracking & Utilities
+filterpy      # Kalman Filters
+scipy
+pandas
+
+# API & Backend
+fastapi
+uvicorn
+python-multipart
+
+# Visualization
+matplotlib
+pillow
