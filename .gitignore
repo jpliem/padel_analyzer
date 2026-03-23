@@ -1,0 +1,10 @@
+node_modules/
+venv/
+__pycache__/
+*.pyc
+.env
+*.pt
+frontend/build/
+data/
+*.mp4
+*.mov
