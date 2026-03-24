@@ -100,3 +100,46 @@ class TestPipelineIntegration:
 
         assert engine.game_over is True
         assert engine.team1_sets == 1
+
+
+class TestPhase2Pipeline:
+    def test_event_detector_full_flow(self, sample_court_corners_pixels):
+        from cv.court_calibration import CourtCalibration
+        from cv.ball_tracker import BallTracker
+        from cv.player_tracker import PlayerTracker
+        from logic.event_detector import EventDetector
+        from logic.scoring_engine import PadelScoringEngine
+        from models.config import EventDetectorConfig
+        from models.types import ServerInfo, TeamId, MatchState
+        import numpy as np
+
+        cal = CourtCalibration()
+        cal.calibrate(sample_court_corners_pixels)
+
+        config = EventDetectorConfig()
+        scoring = PadelScoringEngine(
+            golden_point=True,
+            first_server=ServerInfo(team_id=TeamId.TEAM_A, player_id="P1"),
+            team_players={TeamId.TEAM_A: ["P1", "P2"], TeamId.TEAM_B: ["P3", "P4"]},
+        )
+        player_tracker = PlayerTracker(cal)
+        team_map = {"P1": 1, "P2": 1, "P3": 2, "P4": 2}
+
+        ed = EventDetector(config, cal, scoring, player_tracker, team_map)
+        assert ed.state_machine.state == MatchState.IDLE
+
+        events = ed.process(None, [], frame_no=0)
+        assert len(events) == 0
+
+    def test_replay_buffer_in_pipeline(self):
+        from pipeline.replay_buffer import ReplayBuffer
+        import numpy as np
+
+        rb = ReplayBuffer(max_frames=10)
+        for i in range(15):
+            frame = np.random.randint(0, 255, (100, 100, 3), dtype=np.uint8)
+            rb.add(frame, timestamp=float(i) / 30.0)
+
+        frames = rb.get_frames()
+        assert len(frames) == 10
+        assert abs(frames[0]["timestamp"] - 5.0 / 30.0) < 0.01
