@@ -134,6 +134,7 @@ export interface TrajectoryPoint {
 export interface LiveStartData {
   match_id: string;
   device_id: number;
+  rtsp_url?: string;
   record: boolean;
 }
 ```
@@ -476,7 +477,9 @@ def list_matches():
             status = "created"
             if config.get("calibration"):
                 status = "calibrated"
-            if match_id in _active_analyzers:
+            # Check for analysis results on disk
+            results_path = os.path.join(DATA_DIR, match_id, "results.json")
+            if os.path.exists(results_path) or match_id in _active_analyzers:
                 status = "analyzed"
             matches.append({
                 "match_id": match_id,
@@ -1788,7 +1791,9 @@ const LiveView: React.FC = () => {
             </Panel>
             <PanelResizeHandle style={{ height: 4, background: '#e0e0e0', cursor: 'row-resize' }} />
             <Panel defaultSize={50} minSize={15}>
-              <CourtMiniMap height={undefined} />
+              <div style={{ height: '100%' }}>
+                <CourtMiniMap height={300} />
+              </div>
             </Panel>
           </PanelGroup>
         </Panel>
