@@ -32,6 +32,16 @@ class EventType(Enum):
     WALL_HIT = "WALL_HIT"
     OUT = "OUT"
     POINT_END = "POINT_END"
+    HIT = "HIT"
+
+
+class MatchState(Enum):
+    IDLE = "IDLE"
+    SERVING_1ST = "SERVING_1ST"
+    SERVING_2ND = "SERVING_2ND"
+    RALLY = "RALLY"
+    POINT_ENDED = "POINT_ENDED"
+    SCORE_UPDATE = "SCORE_UPDATE"
 
 
 @dataclass
