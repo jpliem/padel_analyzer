@@ -4,7 +4,7 @@
 
 Replace the prototype frontend with a functional React app that connects to all Phase 2 backend APIs. Dashboard landing, match setup wizard, court calibration with interactive corner clicking, offline video analysis with results, and live camera mode with WebSocket streaming.
 
-**Scope:** Frontend only. No backend changes. No TrackNetV2. No advanced analytics (heatmaps, PDF export). Those are separate phases.
+**Scope:** Frontend rebuild + one small backend addition (`GET /matches` list endpoint). No TrackNetV2. No advanced analytics (heatmaps, PDF export). Those are separate phases.
 
 ## Key Decisions
 
@@ -85,8 +85,8 @@ Each card shows:
 
 ### API Integration
 
-- `GET /match/{id}` for each match — fetch on mount
-- Match list stored in localStorage (array of match IDs) since the backend doesn't have a list endpoint
+- `GET /matches` — new backend endpoint that lists all match IDs by scanning `data/matches/` directory. Returns `{matches: [{match_id, match_name, status}]}`. **This requires a small backend addition** (single endpoint, ~10 lines).
+- `GET /match/{id}` — fetch full match data for each card
 - Refresh on return to dashboard
 
 ---
@@ -98,8 +98,8 @@ Each card shows:
 | Field | Type | Default | Maps to API |
 |-------|------|---------|-------------|
 | Match Name | text input | "Match" | `match_name` |
-| Format | toggle: Best of 3 / Best of 1 | Best of 3 | `format` |
-| Deuce Rule | toggle: Golden Point / Advantage | Golden Point | `golden_point` |
+| Format | toggle: Best of 3 / Best of 1 | Best of 3 | `format` (`"best_of_3"` or `"best_of_1"`) |
+| Deuce Rule | toggle: Golden Point / Advantage | Golden Point | `golden_point` (boolean) |
 | Team A Player 1 | text input | "Player 1" | `players.P1` |
 | Team A Player 2 | text input | "Player 2" | `players.P2` |
 | Team B Player 3 | text input | "Player 3" | `players.P3` |
@@ -157,6 +157,8 @@ Toggle between:
 
 POST to `/match/:id/calibrate` with `{corners: [[x1,y1], [x2,y2], [x3,y3], [x4,y4]]}`.
 
+**Important:** Send pixel coordinates in the original video frame resolution, not canvas display coordinates. If the canvas is 640px wide but the video is 1280px, scale clicks by `videoWidth / canvasWidth`.
+
 On success, show "Calibration saved!" and two buttons:
 - "Analyze Video →" (navigates to `/match/:id/analyze`)
 - "Go Live →" (navigates to `/match/:id/live`)
@@ -202,8 +204,8 @@ Split vertically into 3 sections:
 
 1. Upload: `POST /analyze/upload?match_id={id}` with file
 2. Start: `POST /analyze/start/{job_id}`
-3. Poll: `GET /analyze/status/{job_id}` every 1s until `state === "complete"`
-4. Fetch results: `GET /match/:id/score`, `GET /match/:id/events`, `GET /match/:id/trajectory`
+3. Poll: `GET /analyze/status/{job_id}` every 1s until `state === "complete"` or `state === "error"`. On error, show error message from response `error` field.
+4. On complete: fetch results via `GET /match/:id/score`, `GET /match/:id/events`, `GET /match/:id/trajectory`
 
 ---
 
@@ -238,12 +240,23 @@ Same layout as offline analysis, but with live data:
 - **Re-assign Player:** Right-click a player dot on 3D court → dialog to reassign. Sends WebSocket `{type: "reassign", track_id, player_id}`.
 - **Stop:** `POST /live/stop` → redirects to `/match/:id/analyze` to see recorded results
 
+### Startup Sequence
+
+1. On mount: call `POST /live/start` with `{match_id, device_id: 0}` to initialize the LiveManager
+2. On success: connect WebSocket to `ws://localhost:8000/live/stream`
+3. If `/live/start` fails (e.g., camera not available): show error, stay on page with retry button
+
 ### WebSocket Lifecycle
 
-1. On mount: connect to `ws://localhost:8000/live/stream`
-2. On message: dispatch by `type` field (frame, score, event, status)
-3. On disconnect: show "Reconnecting..." overlay, auto-retry every 2s
-4. On unmount: close WebSocket cleanly
+1. On connect: start rendering frames
+2. On message: dispatch by `type` field (frame, score, event)
+3. On disconnect: show "Reconnecting..." overlay, auto-retry every 2s. On reconnect, fetch `GET /match/:id/score` and `GET /match/:id/events` (last 10) as catch-up.
+4. On unmount: close WebSocket, call `POST /live/stop`
+
+### Score Correction & Player Reassignment
+
+Primary path: send via WebSocket (`{type: "correct", team}` or `{type: "reassign", track_id, player_id}`).
+Fallback: if WebSocket is disconnected, use REST endpoints `POST /match/:id/correct-score` and `POST /match/:id/assign-player`.
 
 ---
 
@@ -270,6 +283,7 @@ Single `api.ts` module with typed functions:
 ```typescript
 const API = "http://localhost:8000";
 
+export async function listMatches(): Promise<MatchSummary[]> { ... }
 export async function createMatch(data: MatchSetupData): Promise<{match_id: string}> { ... }
 export async function getMatch(id: string): Promise<MatchData> { ... }
 export async function calibrate(id: string, corners: number[][]): Promise<void> { ... }
