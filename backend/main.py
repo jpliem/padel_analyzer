@@ -4,13 +4,14 @@ import os
 # Ensure src/ is on Python path for consistent imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, BackgroundTasks
+from fastapi import FastAPI, HTTPException, UploadFile, File, BackgroundTasks, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Dict, List, Optional
 import json
 import uuid
 import shutil
+import asyncio
 
 app = FastAPI(title="Padel Analyzer API")
 
@@ -237,6 +238,103 @@ def get_analysis_status(job_id: str):
     if job_id not in _analysis_jobs:
         raise HTTPException(status_code=404, detail="Job not found")
     return _analysis_jobs[job_id]
+
+
+class LiveStartRequest(BaseModel):
+    device_id: int = 0
+    rtsp_url: Optional[str] = None
+    match_id: str
+    record: bool = False
+
+
+_live_manager = None
+
+
+@app.post("/live/start")
+def start_live(req: LiveStartRequest):
+    global _live_manager
+    match_data = _load_match(req.match_id)
+
+    import numpy as np
+    from cv.court_calibration import CourtCalibration
+    from models.config import EventDetectorConfig
+    from pipeline.video_analyzer import VideoAnalyzer
+    from pipeline.live_manager import LiveManager
+
+    cal = CourtCalibration()
+    if match_data.get("calibration"):
+        cal = CourtCalibration.from_dict(match_data["calibration"])
+
+    config = EventDetectorConfig()
+    analyzer = VideoAnalyzer(match_id=req.match_id, calibration=cal, config=config)
+    _active_analyzers[req.match_id] = analyzer
+
+    device = req.rtsp_url if req.rtsp_url else req.device_id
+    record_path = os.path.join(_match_dir(req.match_id), "recording.mp4") if req.record else None
+
+    _live_manager = LiveManager(analyzer, device_id=device,
+                                record=req.record, record_path=record_path)
+    _live_manager.start()
+    return {"status": "started", "match_id": req.match_id}
+
+
+@app.post("/live/stop")
+def stop_live():
+    global _live_manager
+    if _live_manager is None:
+        raise HTTPException(status_code=400, detail="No live session running")
+    _live_manager.stop()
+    _live_manager = None
+    return {"status": "stopped"}
+
+
+@app.get("/live/replay")
+def get_replay():
+    if _live_manager is None:
+        raise HTTPException(status_code=400, detail="No live session running")
+    import base64
+    frames = _live_manager.get_replay()
+    return {"frames": [
+        {"jpeg": base64.b64encode(f["jpeg"]).decode(), "timestamp": f["timestamp"]}
+        for f in frames
+    ]}
+
+
+@app.websocket("/live/stream")
+async def live_stream(ws: WebSocket):
+    await ws.accept()
+    try:
+        while True:
+            if _live_manager and _live_manager.is_running:
+                frame_b64 = _live_manager.get_latest_frame_b64()
+                if frame_b64:
+                    await ws.send_json({"type": "frame", "jpeg": frame_b64})
+
+                try:
+                    event = _live_manager._event_queue.get_nowait()
+                    await ws.send_json(event)
+                except asyncio.QueueEmpty:
+                    pass
+
+                try:
+                    data = await asyncio.wait_for(ws.receive_json(), timeout=0.01)
+                    if data.get("type") == "correct" and _live_manager._analyzer:
+                        _live_manager._analyzer.scoring_engine.add_point(data["team"])
+                    elif data.get("type") == "reassign" and _live_manager._analyzer:
+                        _live_manager._analyzer.player_tracker.assign_player(
+                            data["track_id"], data["player_id"])
+                except asyncio.TimeoutError:
+                    pass
+
+                if _live_manager._latest_result:
+                    await ws.send_json({
+                        "type": "score",
+                        "data": _live_manager._latest_result.score,
+                    })
+
+            await asyncio.sleep(1 / 30)
+    except WebSocketDisconnect:
+        pass
 
 
 # Legacy endpoint for backwards compatibility
