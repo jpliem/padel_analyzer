@@ -94,6 +94,86 @@ def calibrate_court(match_id: str, req: CalibrationRequest):
     return {"status": "calibrated", "match_id": match_id}
 
 
+_active_analyzers: Dict[str, object] = {}
+
+
+class CorrectScoreRequest(BaseModel):
+    team: int
+
+
+class AssignPlayerRequest(BaseModel):
+    track_id: int
+    player_id: str
+
+
+@app.get("/match/{match_id}/score")
+def get_score(match_id: str):
+    _load_match(match_id)
+    analyzer = _active_analyzers.get(match_id)
+    if analyzer is None:
+        return {"score": "0 - 0", "games": "0 - 0", "sets": "0 - 0"}
+    return analyzer.scoring_engine.get_score_display()
+
+
+@app.get("/match/{match_id}/events")
+def get_events(match_id: str):
+    _load_match(match_id)
+    analyzer = _active_analyzers.get(match_id)
+    if analyzer is None:
+        return {"events": []}
+    return {"events": [
+        {
+            "event_type": e.event_type.value,
+            "timestamp": e.timestamp,
+            "frame_number": e.frame_number,
+            "position": {"x": e.position.x, "y": e.position.y},
+            "metadata": e.metadata,
+        }
+        for e in analyzer.all_events
+    ]}
+
+
+@app.get("/match/{match_id}/trajectory")
+def get_trajectory(match_id: str):
+    _load_match(match_id)
+    analyzer = _active_analyzers.get(match_id)
+    if analyzer is None:
+        return {"trajectory": []}
+    return {"trajectory": analyzer.ball_tracker.trajectory}
+
+
+@app.get("/match/{match_id}/stats")
+def get_stats(match_id: str):
+    _load_match(match_id)
+    analyzer = _active_analyzers.get(match_id)
+    if analyzer is None:
+        return {"stats": {}}
+    return {"stats": {
+        "total_events": len(analyzer.all_events),
+        "frames_processed": analyzer._frame_count if hasattr(analyzer, '_frame_count') else 0,
+    }}
+
+
+@app.post("/match/{match_id}/correct-score")
+def correct_score(match_id: str, req: CorrectScoreRequest):
+    _load_match(match_id)
+    analyzer = _active_analyzers.get(match_id)
+    if analyzer is None:
+        raise HTTPException(status_code=400, detail="No active analysis for this match")
+    analyzer.scoring_engine.add_point(req.team)
+    return {"status": "corrected", "score": analyzer.scoring_engine.get_score_display()}
+
+
+@app.post("/match/{match_id}/assign-player")
+def assign_player(match_id: str, req: AssignPlayerRequest):
+    _load_match(match_id)
+    analyzer = _active_analyzers.get(match_id)
+    if analyzer is None:
+        raise HTTPException(status_code=400, detail="No active analysis for this match")
+    analyzer.player_tracker.assign_player(req.track_id, req.player_id)
+    return {"status": "assigned", "track_id": req.track_id, "player_id": req.player_id}
+
+
 # Legacy endpoint for backwards compatibility
 @app.get("/setup")
 def get_setup():
