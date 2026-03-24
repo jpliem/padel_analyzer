@@ -1,3 +1,5 @@
+# DEPRECATED: Split into ball_tracker.py + player_tracker.py.
+# Kept for reference by run_real_analysis.py.
 import cv2
 import torch
 from ultralytics import YOLO

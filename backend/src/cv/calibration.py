@@ -1,3 +1,5 @@
+# DEPRECATED: Replaced by court_calibration.py (homography-based).
+# Kept for reference by demo_analyzer.py and run_real_analysis.py.
 import numpy as np
 import cv2
 
