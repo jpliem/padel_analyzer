@@ -18,3 +18,8 @@ python-multipart
 # Visualization
 matplotlib
 pillow
+
+# Testing
+pytest
+pytest-asyncio
+httpx
