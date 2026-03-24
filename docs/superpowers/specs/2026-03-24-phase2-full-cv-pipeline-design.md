@@ -49,7 +49,19 @@ Abstract detector interfaces with YOLO concrete implementations. Single YOLOv8n 
 - Max detections: 4 (padel court constraint)
 - Returns top-4 by confidence
 
-**Shared model optimization**: Both detectors share a single YOLO model instance. One `model(frame)` call per frame, results filtered by class ID in each detector. Avoids running inference twice.
+**Shared model via UnifiedDetector**: A `UnifiedYoloDetector` class runs one `model(frame)` call per frame and caches the results. `YoloBallDetector` and `YoloPlayerDetector` both hold a reference to the same `UnifiedYoloDetector` and filter its cached results by class ID. This ensures single inference per frame even though `detect()` is called separately on each detector.
+
+```python
+class UnifiedYoloDetector:
+    def __init__(self, model_path="yolov8n.pt"):
+        self.model = YOLO(model_path)
+        self._cache = (None, None)  # (frame_id, results)
+
+    def run(self, frame, frame_id) -> Results:
+        if frame_id != self._cache[0]:
+            self._cache = (frame_id, self.model(frame))
+        return self._cache[1]
+```
 
 ### Device Auto-Detection
 
@@ -83,6 +95,41 @@ Existing files unchanged: `ball_tracker.py`, `player_tracker.py`, `court_calibra
 ## Section 2: Event Detection & State Machine
 
 The layer between trackers and the scoring engine. Consumes ball + player positions per frame, emits `MatchEvent` objects, drives the scoring engine.
+
+### Data Type Convention
+
+`BallTracker.update()` returns `Optional[Dict]` with keys `{x, y, z, speed, timestamp, frame, detected}`. All event sub-detectors accept this dict directly — no conversion to `BallPosition` dataclass. The `BallPosition` dataclass in `types.py` is reserved for serialization/API responses. Internally, the pipeline passes tracker dicts for zero-copy performance.
+
+`PlayerTracker.update()` returns `List[Dict]` with keys `{track_id, x, y, bbox}`. Sub-detectors accept this list directly.
+
+### Player Assignment
+
+Player assignment (mapping track IDs like 0,1,2,3 to player IDs like P1-P4) happens in two ways:
+
+1. **Auto-assignment at pipeline start**: After the first N frames (default 30) where tracking stabilizes, `VideoAnalyzer` auto-assigns players by court position — the 2 players on the near side (y < 10m) get P1/P2 (Team A), the 2 on the far side get P3/P4 (Team B). Left/right within a team is by x-position.
+2. **Manual override via API**: `POST /match/{id}/assign-player {track_id, player_id}` or via WebSocket `{type: "reassign", track_id, player_id}` during live mode.
+
+Auto-assignment runs once and can be corrected manually at any time.
+
+### Player-to-Team Mapping
+
+`EventDetector` receives a `team_map: Dict[str, int]` at construction (e.g., `{"P1": 1, "P2": 1, "P3": 2, "P4": 2}`). When `LastHitterDetector` identifies a player_id, the `EventDetector` resolves it to a `team_id` via this map before calling `scoring_engine.add_point(team_id, reason)`.
+
+### EventDetector Config
+
+```python
+@dataclass
+class EventDetectorConfig:
+    bounce_z_threshold: float = 0.3       # meters — ball Z below this = potential bounce
+    bounce_speed_dip_pct: float = 0.4     # speed must drop by 40% vs recent average
+    serve_timeout_frames: int = 90        # max frames to wait for serve bounce (3s at 30fps)
+    winner_timeout_frames: int = 60       # frames without return = winner (2s at 30fps)
+    ball_stopped_frames: int = 15         # consecutive frames at ~0 speed = stopped
+    auto_assign_after_frames: int = 30    # frames before auto-assigning players
+    enclosure_margin: Dict = None         # override enclosure bounds {x_min, x_max, y_min, y_max}
+```
+
+Default enclosure bounds: `x: [-0.5, 10.5], y: [-1.0, 21.0]` (0.5m–1.0m margin beyond court lines for wall play).
 
 ### Match State Machine
 
@@ -121,7 +168,7 @@ SCORE_UPDATE
 ### Sub-Detectors
 
 **BounceDetector**:
-- Triggers when: ball Z estimate drops to ~0 AND ground-plane speed dips AND ball was descending (pixel-Y increasing)
+- Triggers when: ball Z estimate drops below threshold (~0.3m, tunable) AND ground-plane speed dips AND ball was descending (pixel-Y increasing). Uses a combined confidence score from all three signals rather than hard thresholds, since Z estimation from bbox size is noisy. Thresholds will need empirical tuning on real footage.
 - Records: bounce position in court coords, court side (near/far), timestamp, frame number
 - Maintains bounce count per side for double-bounce detection
 
@@ -137,17 +184,18 @@ SCORE_UPDATE
 - That player's team is the "last hitter" — used to determine who loses on errors
 
 **PointEndDetector**:
-- Watches for 5 end conditions:
+- Watches for 6 end conditions:
   1. Double bounce: 2 bounces on same side without ball crossing net (y=10m line)
-  2. Ball out of bounds: `CourtCalibration.is_in_bounds()` returns False after a bounce
-  3. Ball stopped: speed ≈ 0 for 15+ consecutive frames
-  4. Ball lost: `BallTracker.is_lost` is True (60+ frames without detection)
-  5. Winner: ball bounces on one side, no return within N frames (configurable timeout)
+  2. Ball out of enclosure: ball position exceeds the padel enclosure bounds (x < -0.5 or x > 10.5 or y < -1.0 or y > 21.0). Note: `is_in_bounds()` checks court lines (10×20m), but padel walls extend beyond the lines. "Out" means the ball exits the glass enclosure, not just the court lines. A ball at y=20.5 bouncing off the back glass is legal play.
+  3. Wall before bounce: ball contacts a wall (position near enclosure boundary) before bouncing on the ground on the receiving side — illegal in padel. Maps to `PointReason.WALL_BEFORE_BOUNCE`.
+  4. Ball stopped: speed ≈ 0 for 15+ consecutive frames
+  5. Ball lost: `BallTracker.is_lost` is True (60+ frames without detection)
+  6. Winner: ball bounces on one side, no return within N frames (configurable timeout)
 - Emits `PointReason` enum matching the existing `types.py` values
 
 ### Point Winner Logic
 
-5 rules for determining which team wins:
+6 rules for determining which team wins:
 
 | End Reason | Winner |
 |-----------|--------|
@@ -155,6 +203,7 @@ SCORE_UPDATE
 | DOUBLE_BOUNCE | Team on the OTHER side from where bounces occurred |
 | OUT | Team that did NOT hit last |
 | NET (ball stops) | Team that did NOT hit last |
+| WALL_BEFORE_BOUNCE | Team on the OTHER side (hitter's team loses) |
 | WINNER | Team that hit last (unreturnable shot) |
 
 ### EventDetector (Orchestrator)
@@ -197,23 +246,47 @@ src/logic/
 Central class that wires the full pipeline. Accepts either a video file path (offline) or camera device ID (live).
 
 ```python
+@dataclass
+class FrameResult:
+    ball_position: Optional[Dict]    # from BallTracker — {x,y,z,speed,timestamp,frame,detected}
+    player_positions: List[Dict]     # from PlayerTracker — [{track_id,x,y,bbox}, ...]
+    events: List[MatchEvent]         # from EventDetector
+    score: Dict                      # from ScoringEngine.get_score_display()
+    frame_number: int
+
 class VideoAnalyzer:
     def __init__(self, match_id, calibration, config):
-        self.ball_detector = YoloBallDetector(model)
-        self.player_detector = YoloPlayerDetector(model)  # shared model
+        unified = UnifiedYoloDetector()
+        self.ball_detector = YoloBallDetector(unified)
+        self.player_detector = YoloPlayerDetector(unified)
         self.ball_tracker = BallTracker(calibration)
         self.player_tracker = PlayerTracker(calibration)
-        self.event_detector = EventDetector(calibration, config)
         self.scoring_engine = PadelScoringEngine(...)
+        self.event_detector = EventDetector(
+            calibration, config, self.scoring_engine, self.player_tracker,
+            team_map={"P1": 1, "P2": 1, "P3": 2, "P4": 2}
+        )
+        self._frame_count = 0
+        self._auto_assigned = False
 
     def process_frame(self, frame, frame_no):
-        ball_bbox = self.ball_detector.detect(frame)
-        player_detections = self.player_detector.detect(frame)
+        self._frame_count = frame_no
+        ball_bbox = self.ball_detector.detect(frame, frame_no)
+        player_detections = self.player_detector.detect(frame, frame_no)
         ball_pos = self.ball_tracker.update(ball_bbox, frame_no)
         player_pos = self.player_tracker.update(player_detections, frame_no)
+
+        # Auto-assign players after 30 frames of stable tracking
+        if not self._auto_assigned and frame_no >= 30:
+            self._auto_assign_players(player_pos)
+            self._auto_assigned = True
+
         events = self.event_detector.process(ball_pos, player_pos, frame_no)
-        return FrameResult(ball_pos, player_pos, events, self.scoring_engine.get_score_display())
+        return FrameResult(ball_pos, player_pos, events,
+                           self.scoring_engine.get_score_display(), frame_no)
 ```
+
+`EventDetector` receives `scoring_engine` at construction and calls `scoring_engine.add_point(team_id, reason)` directly when a point ends. It also reads `scoring_engine.current_server` to feed the `ServeDetector`.
 
 **Offline mode** (`analyze_video(path)`):
 - Opens video with `cv2.VideoCapture`
@@ -242,12 +315,13 @@ class VideoAnalyzer:
 - `POST /analyze/start/{job_id}` — start background processing
 - `GET /analyze/status/{job_id}` — progress: `{state, percent, fps, eta}`
 
-**New — Results:**
+**New — Results & Player Management:**
 - `GET /match/{id}/score` — current score display
 - `GET /match/{id}/events` — all match events
 - `GET /match/{id}/trajectory` — ball trajectory data
 - `GET /match/{id}/stats` — player stats, heatmaps
 - `POST /match/{id}/correct-score` — manual score override
+- `POST /match/{id}/assign-player` — manual player assignment `{track_id, player_id}`
 
 **New — Live Mode:**
 - `POST /live/start` — start camera feed `{device_id | rtsp_url, match_id}`
@@ -275,6 +349,12 @@ Ring buffer of 900 JPEG frames (30s × 30fps). Quality 70 (~30KB/frame = ~27MB m
 ### Full Match Recording (optional)
 
 Separate thread writes frames to disk via `cv2.VideoWriter` with H.264 codec. Toggled at `POST /live/start` with `{record: true}`. Saves to `data/matches/{id}/recording.mp4`.
+
+### Live Mode Error Handling
+
+- **Slow inference**: If YOLO inference exceeds frame interval (33ms at 30fps), drop frames to maintain real-time. Process every Nth frame where N keeps up with camera FPS. Interpolate ball position for skipped frames via Kalman prediction.
+- **WebSocket disconnect**: Client reconnect gets current score + last 10 events as catch-up payload. Server continues processing regardless of client connections.
+- **Camera feed interrupted**: Retry connection 3 times with 1s delay. If still down, emit `{type: "error", message: "camera_lost"}` on WebSocket and pause processing. Resume automatically when feed returns.
 
 ### File Structure
 
