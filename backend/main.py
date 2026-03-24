@@ -4,12 +4,13 @@ import os
 # Ensure src/ is on Python path for consistent imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Dict, List, Optional
 import json
 import uuid
+import shutil
 
 app = FastAPI(title="Padel Analyzer API")
 
@@ -172,6 +173,70 @@ def assign_player(match_id: str, req: AssignPlayerRequest):
         raise HTTPException(status_code=400, detail="No active analysis for this match")
     analyzer.player_tracker.assign_player(req.track_id, req.player_id)
     return {"status": "assigned", "track_id": req.track_id, "player_id": req.player_id}
+
+
+_analysis_jobs: Dict[str, Dict] = {}
+
+
+@app.post("/analyze/upload")
+async def upload_video(match_id: str, file: UploadFile = File(...)):
+    _load_match(match_id)
+    match_dir = _match_dir(match_id)
+    os.makedirs(match_dir, exist_ok=True)
+    video_path = os.path.join(match_dir, "video.mp4")
+    with open(video_path, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+    job_id = match_id
+    _analysis_jobs[job_id] = {"state": "uploaded", "percent": 0, "match_id": match_id}
+    return {"job_id": job_id, "status": "uploaded"}
+
+
+@app.post("/analyze/start/{job_id}")
+def start_analysis(job_id: str, background_tasks: BackgroundTasks):
+    if job_id not in _analysis_jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    job = _analysis_jobs[job_id]
+    match_id = job["match_id"]
+    match_data = _load_match(match_id)
+
+    import numpy as np
+    from cv.court_calibration import CourtCalibration
+    from models.config import EventDetectorConfig
+    from pipeline.video_analyzer import VideoAnalyzer
+
+    cal = CourtCalibration()
+    if match_data.get("calibration"):
+        cal = CourtCalibration.from_dict(match_data["calibration"])
+
+    config = EventDetectorConfig()
+    analyzer = VideoAnalyzer(match_id=match_id, calibration=cal, config=config)
+    _active_analyzers[match_id] = analyzer
+
+    video_path = os.path.join(_match_dir(match_id), "video.mp4")
+
+    def progress_cb(frame, total, pct):
+        _analysis_jobs[job_id]["percent"] = round(pct, 1)
+        _analysis_jobs[job_id]["state"] = "processing"
+
+    def run_analysis():
+        _analysis_jobs[job_id]["state"] = "processing"
+        try:
+            result = analyzer.analyze_video(video_path, progress_callback=progress_cb)
+            _analysis_jobs[job_id]["state"] = "complete"
+            _analysis_jobs[job_id]["percent"] = 100
+        except Exception as e:
+            _analysis_jobs[job_id]["state"] = "error"
+            _analysis_jobs[job_id]["error"] = str(e)
+
+    background_tasks.add_task(run_analysis)
+    return {"status": "started", "job_id": job_id}
+
+
+@app.get("/analyze/status/{job_id}")
+def get_analysis_status(job_id: str):
+    if job_id not in _analysis_jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return _analysis_jobs[job_id]
 
 
 # Legacy endpoint for backwards compatibility
