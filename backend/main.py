@@ -4,12 +4,14 @@ import os
 # Ensure src/ is on Python path for consistent imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File, BackgroundTasks, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Dict, List, Optional
 import json
 import uuid
+import shutil
+import asyncio
 
 app = FastAPI(title="Padel Analyzer API")
 
@@ -94,14 +96,245 @@ def calibrate_court(match_id: str, req: CalibrationRequest):
     return {"status": "calibrated", "match_id": match_id}
 
 
-# Legacy endpoint for backwards compatibility
-@app.get("/setup")
-def get_setup():
-    storage = "court_setup.json"
-    if os.path.exists(storage):
-        with open(storage) as f:
-            return json.load(f)
-    return {"name": "Default Court", "cameras": []}
+_active_analyzers: Dict[str, object] = {}
+
+
+class CorrectScoreRequest(BaseModel):
+    team: int
+
+
+class AssignPlayerRequest(BaseModel):
+    track_id: int
+    player_id: str
+
+
+@app.get("/match/{match_id}/score")
+def get_score(match_id: str):
+    _load_match(match_id)
+    analyzer = _active_analyzers.get(match_id)
+    if analyzer is None:
+        return {"score": "0 - 0", "games": "0 - 0", "sets": "0 - 0"}
+    return analyzer.scoring_engine.get_score_display()
+
+
+@app.get("/match/{match_id}/events")
+def get_events(match_id: str):
+    _load_match(match_id)
+    analyzer = _active_analyzers.get(match_id)
+    if analyzer is None:
+        return {"events": []}
+    return {"events": [
+        {
+            "event_type": e.event_type.value,
+            "timestamp": e.timestamp,
+            "frame_number": e.frame_number,
+            "position": {"x": e.position.x, "y": e.position.y},
+            "metadata": e.metadata,
+        }
+        for e in analyzer.all_events
+    ]}
+
+
+@app.get("/match/{match_id}/trajectory")
+def get_trajectory(match_id: str):
+    _load_match(match_id)
+    analyzer = _active_analyzers.get(match_id)
+    if analyzer is None:
+        return {"trajectory": []}
+    return {"trajectory": analyzer.ball_tracker.trajectory}
+
+
+@app.get("/match/{match_id}/stats")
+def get_stats(match_id: str):
+    _load_match(match_id)
+    analyzer = _active_analyzers.get(match_id)
+    if analyzer is None:
+        return {"stats": {}}
+    return {"stats": {
+        "total_events": len(analyzer.all_events),
+        "frames_processed": analyzer._frame_count if hasattr(analyzer, '_frame_count') else 0,
+    }}
+
+
+@app.post("/match/{match_id}/correct-score")
+def correct_score(match_id: str, req: CorrectScoreRequest):
+    _load_match(match_id)
+    analyzer = _active_analyzers.get(match_id)
+    if analyzer is None:
+        raise HTTPException(status_code=400, detail="No active analysis for this match")
+    analyzer.scoring_engine.add_point(req.team)
+    return {"status": "corrected", "score": analyzer.scoring_engine.get_score_display()}
+
+
+@app.post("/match/{match_id}/assign-player")
+def assign_player(match_id: str, req: AssignPlayerRequest):
+    _load_match(match_id)
+    analyzer = _active_analyzers.get(match_id)
+    if analyzer is None:
+        raise HTTPException(status_code=400, detail="No active analysis for this match")
+    analyzer.player_tracker.assign_player(req.track_id, req.player_id)
+    return {"status": "assigned", "track_id": req.track_id, "player_id": req.player_id}
+
+
+_analysis_jobs: Dict[str, Dict] = {}
+
+
+@app.post("/analyze/upload")
+async def upload_video(match_id: str, file: UploadFile = File(...)):
+    _load_match(match_id)
+    match_dir = _match_dir(match_id)
+    os.makedirs(match_dir, exist_ok=True)
+    video_path = os.path.join(match_dir, "video.mp4")
+    with open(video_path, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+    job_id = match_id
+    _analysis_jobs[job_id] = {"state": "uploaded", "percent": 0, "match_id": match_id}
+    return {"job_id": job_id, "status": "uploaded"}
+
+
+@app.post("/analyze/start/{job_id}")
+def start_analysis(job_id: str, background_tasks: BackgroundTasks):
+    if job_id not in _analysis_jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    job = _analysis_jobs[job_id]
+    match_id = job["match_id"]
+    match_data = _load_match(match_id)
+
+    import numpy as np
+    from cv.court_calibration import CourtCalibration
+    from models.config import EventDetectorConfig
+    from pipeline.video_analyzer import VideoAnalyzer
+
+    cal = CourtCalibration()
+    if match_data.get("calibration"):
+        cal = CourtCalibration.from_dict(match_data["calibration"])
+
+    config = EventDetectorConfig()
+    analyzer = VideoAnalyzer(match_id=match_id, calibration=cal, config=config)
+    _active_analyzers[match_id] = analyzer
+
+    video_path = os.path.join(_match_dir(match_id), "video.mp4")
+
+    def progress_cb(frame, total, pct):
+        _analysis_jobs[job_id]["percent"] = round(pct, 1)
+        _analysis_jobs[job_id]["state"] = "processing"
+
+    def run_analysis():
+        _analysis_jobs[job_id]["state"] = "processing"
+        try:
+            result = analyzer.analyze_video(video_path, progress_callback=progress_cb)
+            _analysis_jobs[job_id]["state"] = "complete"
+            _analysis_jobs[job_id]["percent"] = 100
+        except Exception as e:
+            _analysis_jobs[job_id]["state"] = "error"
+            _analysis_jobs[job_id]["error"] = str(e)
+
+    background_tasks.add_task(run_analysis)
+    return {"status": "started", "job_id": job_id}
+
+
+@app.get("/analyze/status/{job_id}")
+def get_analysis_status(job_id: str):
+    if job_id not in _analysis_jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return _analysis_jobs[job_id]
+
+
+class LiveStartRequest(BaseModel):
+    device_id: int = 0
+    rtsp_url: Optional[str] = None
+    match_id: str
+    record: bool = False
+
+
+_live_manager = None
+
+
+@app.post("/live/start")
+def start_live(req: LiveStartRequest):
+    global _live_manager
+    match_data = _load_match(req.match_id)
+
+    import numpy as np
+    from cv.court_calibration import CourtCalibration
+    from models.config import EventDetectorConfig
+    from pipeline.video_analyzer import VideoAnalyzer
+    from pipeline.live_manager import LiveManager
+
+    cal = CourtCalibration()
+    if match_data.get("calibration"):
+        cal = CourtCalibration.from_dict(match_data["calibration"])
+
+    config = EventDetectorConfig()
+    analyzer = VideoAnalyzer(match_id=req.match_id, calibration=cal, config=config)
+    _active_analyzers[req.match_id] = analyzer
+
+    device = req.rtsp_url if req.rtsp_url else req.device_id
+    record_path = os.path.join(_match_dir(req.match_id), "recording.mp4") if req.record else None
+
+    _live_manager = LiveManager(analyzer, device_id=device,
+                                record=req.record, record_path=record_path)
+    _live_manager.start()
+    return {"status": "started", "match_id": req.match_id}
+
+
+@app.post("/live/stop")
+def stop_live():
+    global _live_manager
+    if _live_manager is None:
+        raise HTTPException(status_code=400, detail="No live session running")
+    _live_manager.stop()
+    _live_manager = None
+    return {"status": "stopped"}
+
+
+@app.get("/live/replay")
+def get_replay():
+    if _live_manager is None:
+        raise HTTPException(status_code=400, detail="No live session running")
+    import base64
+    frames = _live_manager.get_replay()
+    return {"frames": [
+        {"jpeg": base64.b64encode(f["jpeg"]).decode(), "timestamp": f["timestamp"]}
+        for f in frames
+    ]}
+
+
+@app.websocket("/live/stream")
+async def live_stream(ws: WebSocket):
+    await ws.accept()
+    try:
+        while True:
+            if _live_manager and _live_manager.is_running:
+                frame_b64 = _live_manager.get_latest_frame_b64()
+                if frame_b64:
+                    await ws.send_json({"type": "frame", "jpeg": frame_b64})
+
+                try:
+                    event = _live_manager._event_queue.get_nowait()
+                    await ws.send_json(event)
+                except asyncio.QueueEmpty:
+                    pass
+
+                try:
+                    data = await asyncio.wait_for(ws.receive_json(), timeout=0.01)
+                    if data.get("type") == "correct" and _live_manager._analyzer:
+                        _live_manager._analyzer.scoring_engine.add_point(data["team"])
+                    elif data.get("type") == "reassign" and _live_manager._analyzer:
+                        _live_manager._analyzer.player_tracker.assign_player(
+                            data["track_id"], data["player_id"])
+                except asyncio.TimeoutError:
+                    pass
+
+                if _live_manager._latest_result:
+                    await ws.send_json({
+                        "type": "score",
+                        "data": _live_manager._latest_result.score,
+                    })
+
+            await asyncio.sleep(1 / 30)
+    except WebSocketDisconnect:
+        pass
 
 
 if __name__ == "__main__":
