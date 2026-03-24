@@ -337,16 +337,6 @@ async def live_stream(ws: WebSocket):
         pass
 
 
-# Legacy endpoint for backwards compatibility
-@app.get("/setup")
-def get_setup():
-    storage = "court_setup.json"
-    if os.path.exists(storage):
-        with open(storage) as f:
-            return json.load(f)
-    return {"name": "Default Court", "cameras": []}
-
-
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
