@@ -8,3 +8,4 @@ frontend/build/
 data/
 *.mp4
 *.mov
+.superpowers/
