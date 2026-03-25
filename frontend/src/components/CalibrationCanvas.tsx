@@ -38,44 +38,53 @@ const CalibrationCanvas: React.FC<Props> = ({ videoFile, corners, onCornerClick,
     if (videoRef.current) ctx.drawImage(videoRef.current, 0, 0);
 
     if (corners.length > 0) {
-      ctx.strokeStyle = corners.length === 4 ? '#00b894' : '#74b9ff';
+      // Draw court lines connecting keypoints
+      const lines: [number, number][] = [
+        [0, 1],   // k1-k2 near baseline
+        [10, 11], // k11-k12 far baseline
+        [0, 10],  // k1-k11 left sideline
+        [1, 11],  // k2-k12 right sideline
+        [5, 6],   // k6-k7 net
+        [2, 4],   // k3-k5 near service line
+        [7, 9],   // k8-k10 far service line
+        [3, 8],   // k4-k9 center service line
+      ];
+
       ctx.lineWidth = 2;
-      ctx.setLineDash(corners.length === 4 ? [] : [6, 4]);
-      ctx.beginPath();
-      corners.forEach((c, i) => {
-        if (i === 0) ctx.moveTo(c[0], c[1]);
-        else ctx.lineTo(c[0], c[1]);
-      });
-      if (corners.length === 4) ctx.closePath();
-      ctx.stroke();
+      for (const [a, b] of lines) {
+        if (a < corners.length && b < corners.length) {
+          ctx.beginPath();
+          ctx.moveTo(corners[a][0], corners[a][1]);
+          ctx.lineTo(corners[b][0], corners[b][1]);
+          ctx.strokeStyle = (a === 5 && b === 6) ? '#fdcb6e' : '#00b894';
+          ctx.setLineDash([]);
+          ctx.stroke();
+        }
+      }
+
+      // Color coding: baselines=blue, service=cyan, net=yellow
+      const colors = [
+        '#74b9ff', '#74b9ff',  // k1-k2 baseline
+        '#55efc4', '#55efc4', '#55efc4',  // k3-k5 service
+        '#fdcb6e', '#fdcb6e',  // k6-k7 net
+        '#55efc4', '#55efc4', '#55efc4',  // k8-k10 service
+        '#74b9ff', '#74b9ff',  // k11-k12 baseline
+      ];
 
       corners.forEach((c, i) => {
         ctx.beginPath();
         ctx.arc(c[0], c[1], 8, 0, Math.PI * 2);
-        // First 4 points are corners (blue), rest are net/extra (purple)
-        ctx.fillStyle = i < 4 ? '#74b9ff' : '#6c5ce7';
+        ctx.fillStyle = colors[i] || '#74b9ff';
         ctx.fill();
         ctx.strokeStyle = 'white';
         ctx.lineWidth = 2;
         ctx.stroke();
         ctx.fillStyle = 'white';
-        ctx.font = 'bold 10px sans-serif';
+        ctx.font = 'bold 9px sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        const label = i < 4 ? `C${i + 1}` : `N${i - 3}`;
-        ctx.fillText(label, c[0], c[1]);
+        ctx.fillText(`${i + 1}`, c[0], c[1]);
       });
-
-      // Draw net line if net points exist (points 5 and 6)
-      if (corners.length > 5) {
-        ctx.beginPath();
-        ctx.moveTo(corners[4][0], corners[4][1]);
-        ctx.lineTo(corners[5][0], corners[5][1]);
-        ctx.strokeStyle = '#fdcb6e';
-        ctx.lineWidth = 2;
-        ctx.setLineDash([]);
-        ctx.stroke();
-      }
     }
   }, [corners, videoFile]);
 

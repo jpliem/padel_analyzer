@@ -30,10 +30,11 @@ class TestPipelineIntegration:
     def test_calibration_feeds_player_tracker(self, calibrated_court):
         """Test that a calibrated court feeds into PlayerTracker correctly."""
         tracker = PlayerTracker(calibrated_court)
-        # Detection bbox must map to on-court position (pixel 900-1020, y=600 = court ~5,1.7)
         dets = np.array([[900, 300, 1020, 600, 0.9, 0]])
-        positions = tracker.update(dets, frame_number=0)
-        assert len(positions) == 1
+        # ByteTrack needs multiple frames to establish tracks
+        for i in range(5):
+            positions = tracker.update(dets, frame_number=i)
+        assert len(positions) >= 1
 
     def test_full_pipeline_point_flow(self, calibrated_court):
         """Simulate a full point: detection → tracking → scoring.

@@ -4,20 +4,34 @@ import { calibrate, uploadVideo, listTemplates, getTemplate, saveTemplate, Calib
 import CalibrationCanvas from '../components/CalibrationCanvas';
 import CourtMiniMap from '../components/CourtMiniMap';
 
-type PointMode = 'corners' | 'net';
+// 12 keypoints matching the backend KEYPOINT_COURT_COORDS_12
+const KEYPOINT_LABELS = [
+  'K1: Near-Left Baseline',
+  'K2: Near-Right Baseline',
+  'K3: Near-Left Service',
+  'K4: Near-Center Service',
+  'K5: Near-Right Service',
+  'K6: Net-Left',
+  'K7: Net-Right',
+  'K8: Far-Left Service',
+  'K9: Far-Center Service',
+  'K10: Far-Right Service',
+  'K11: Far-Left Baseline',
+  'K12: Far-Right Baseline',
+];
 
-const POINT_LABELS: Record<PointMode, string[]> = {
-  corners: ['Near-Left', 'Near-Right', 'Far-Right', 'Far-Left'],
-  net: ['Net-Left', 'Net-Right'],
-};
+// Court coords for preview
+const KEYPOINT_COURT = [
+  [0, 0], [10, 0], [0, 6.95], [5, 6.95], [10, 6.95],
+  [0, 10], [10, 10], [0, 13.05], [5, 13.05], [10, 13.05],
+  [0, 20], [10, 20],
+];
 
 const Calibration: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [videoFile, setVideoFile] = useState<File | null>(null);
-  const [corners, setCorners] = useState<number[][]>([]);
-  const [netPoints, setNetPoints] = useState<number[][]>([]);
-  const [pointMode, setPointMode] = useState<PointMode>('corners');
+  const [keypoints, setKeypoints] = useState<number[][]>([]);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -31,24 +45,19 @@ const Calibration: React.FC = () => {
     listTemplates().then(r => setTemplates(r.templates)).catch(() => {});
   }, []);
 
-  const activePoints = pointMode === 'corners' ? corners : netPoints;
-  const maxPoints = pointMode === 'corners' ? 4 : 2;
-  const labels = POINT_LABELS[pointMode];
-
-  const handleCornerClick = (x: number, y: number) => {
-    if (pointMode === 'corners' && corners.length < 4) {
-      setCorners([...corners, [x, y]]);
-    } else if (pointMode === 'net' && netPoints.length < 2) {
-      setNetPoints([...netPoints, [x, y]]);
+  const handleClick = (x: number, y: number) => {
+    if (keypoints.length < 12) {
+      setKeypoints([...keypoints, [x, y]]);
     }
   };
 
   const handleSave = async () => {
-    if (!id || corners.length !== 4) return;
+    if (!id || keypoints.length < 4) return;
     setSaving(true);
     setError(null);
     try {
-      await calibrate(id, corners, netPoints.length === 2 ? netPoints : null);
+      // Send all keypoints as "corners" — backend detects 12-keypoint mode
+      await calibrate(id, keypoints, null);
       if (videoFile) {
         await uploadVideo(id, videoFile);
       }
@@ -61,8 +70,7 @@ const Calibration: React.FC = () => {
   };
 
   const handleSaveTemplate = async () => {
-    if (!templateName.trim() || corners.length !== 4) return;
-    // Capture thumbnail from video
+    if (!templateName.trim() || keypoints.length < 4) return;
     let thumbnail: string | null = null;
     const canvas = document.querySelector('canvas');
     if (canvas) {
@@ -71,11 +79,10 @@ const Calibration: React.FC = () => {
     try {
       const result = await saveTemplate({
         name: templateName.trim(),
-        corners,
-        net_points: netPoints.length === 2 ? netPoints : null,
+        corners: keypoints,
         thumbnail,
       });
-      setTemplates([...templates, { id: result.id, name: templateName.trim(), corners, net_points: netPoints.length === 2 ? netPoints : null, has_thumbnail: !!thumbnail }]);
+      setTemplates([...templates, { id: result.id, name: templateName.trim(), corners: keypoints, has_thumbnail: !!thumbnail }]);
       setShowSaveTemplate(false);
       setTemplateName('');
     } catch (err: any) {
@@ -86,22 +93,23 @@ const Calibration: React.FC = () => {
   const loadTemplate = async (templateId: string) => {
     try {
       const t = await getTemplate(templateId);
-      setCorners(t.corners);
-      if (t.net_points) setNetPoints(t.net_points);
-      setPointMode('corners');
+      setKeypoints(t.corners);
     } catch (err: any) {
       setError(err.message);
     }
   };
 
-  // Court preview — show where points are in court coords
-  const previewPlayers = corners.length === 4 ? corners.map((c, i) => ({
-    id: `C${i + 1}`,
-    x: i < 2 ? (i === 0 ? 0 : 10) : (i === 2 ? 10 : 0),
-    y: i < 2 ? 0 : 20,
+  // Preview dots on the 2D court
+  const previewDots = keypoints.map((_, i) => ({
+    id: `K${i + 1}`,
+    x: i < KEYPOINT_COURT.length ? KEYPOINT_COURT[i][0] : 5,
+    y: i < KEYPOINT_COURT.length ? KEYPOINT_COURT[i][1] : 10,
     team: 'A' as const,
-    label: `C${i + 1}`,
-  })) : [];
+    label: `${i + 1}`,
+  }));
+
+  const currentLabel = keypoints.length < 12 ? KEYPOINT_LABELS[keypoints.length] : 'All 12 set!';
+  const progress = keypoints.length;
 
   return (
     <div style={{ display: 'flex', height: 'calc(100vh - 56px)' }}>
@@ -109,42 +117,24 @@ const Calibration: React.FC = () => {
       <div style={{ flex: 2 }}>
         <CalibrationCanvas
           videoFile={videoFile}
-          corners={[...corners, ...netPoints]}
-          onCornerClick={handleCornerClick}
-          onReset={() => {
-            if (pointMode === 'corners') setCorners([]);
-            else setNetPoints([]);
-          }}
+          corners={keypoints}
+          onCornerClick={handleClick}
+          onReset={() => setKeypoints([])}
         />
       </div>
 
       {/* Right: Controls */}
-      <div style={{ flex: 1, minWidth: 300, padding: 16, display: 'flex', flexDirection: 'column', gap: 10, background: '#fafafa', borderLeft: '1px solid #e0e0e0', overflow: 'auto' }}>
-        <h2 style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>Court Calibration</h2>
+      <div style={{ flex: 1, minWidth: 300, padding: 16, display: 'flex', flexDirection: 'column', gap: 8, background: '#fafafa', borderLeft: '1px solid #e0e0e0', overflow: 'auto' }}>
+        <h2 style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>Court Calibration (12 Keypoints)</h2>
 
-        {/* Templates section */}
+        {/* Templates */}
         {templates.length > 0 && (
           <div>
             <div className="label">Saved Templates</div>
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
               {templates.map(t => (
-                <button
-                  key={t.id}
-                  onClick={() => loadTemplate(t.id)}
-                  style={{
-                    padding: '6px 10px', background: 'white', border: '1px solid #d0d0d0',
-                    borderRadius: 6, fontSize: 11, cursor: 'pointer', display: 'flex',
-                    alignItems: 'center', gap: 6,
-                  }}
-                >
-                  {t.has_thumbnail && (
-                    <img
-                      src={`http://localhost:8000/templates/${t.id}/thumbnail`}
-                      alt=""
-                      style={{ width: 32, height: 20, borderRadius: 2, objectFit: 'cover' }}
-                      onError={e => (e.currentTarget.style.display = 'none')}
-                    />
-                  )}
+                <button key={t.id} onClick={() => loadTemplate(t.id)}
+                  style={{ padding: '4px 8px', background: 'white', border: '1px solid #d0d0d0', borderRadius: 4, fontSize: 11, cursor: 'pointer' }}>
                   {t.name}
                 </button>
               ))}
@@ -157,84 +147,101 @@ const Calibration: React.FC = () => {
           <div className="label">Video Source</div>
           <input type="file" accept="video/*" onChange={e => {
             const file = e.target.files?.[0];
-            if (file) { setVideoFile(file); setCorners([]); setNetPoints([]); setSaved(false); }
+            if (file) { setVideoFile(file); setKeypoints([]); setSaved(false); }
           }} style={{ fontSize: 12 }} />
         </div>
 
-        {/* Point mode selector */}
+        {/* Progress bar */}
         <div>
-          <div className="label">Reference Points</div>
-          <div style={{ display: 'flex', gap: 4 }}>
-            <button
-              onClick={() => setPointMode('corners')}
-              style={{
-                flex: 1, padding: 6, fontSize: 12, borderRadius: 6, cursor: 'pointer',
-                border: pointMode === 'corners' ? '2px solid #1a1a2e' : '1px solid #d0d0d0',
-                background: pointMode === 'corners' ? '#1a1a2e' : 'white',
-                color: pointMode === 'corners' ? 'white' : '#555',
-              }}
-            >
-              4 Corners {corners.length === 4 ? '✓' : `(${corners.length}/4)`}
-            </button>
-            <button
-              onClick={() => setPointMode('net')}
-              style={{
-                flex: 1, padding: 6, fontSize: 12, borderRadius: 6, cursor: 'pointer',
-                border: pointMode === 'net' ? '2px solid #6c5ce7' : '1px solid #d0d0d0',
-                background: pointMode === 'net' ? '#6c5ce7' : 'white',
-                color: pointMode === 'net' ? 'white' : '#555',
-              }}
-            >
-              Net Posts {netPoints.length === 2 ? '✓' : `(${netPoints.length}/2)`}
-            </button>
+          <div className="label">Keypoints: {progress}/12</div>
+          <div style={{ height: 6, background: '#e8e8e8', borderRadius: 3, overflow: 'hidden' }}>
+            <div style={{
+              width: `${(progress / 12) * 100}%`, height: '100%',
+              background: progress >= 12 ? '#00b894' : progress >= 4 ? '#fdcb6e' : '#74b9ff',
+              borderRadius: 3, transition: 'width 0.2s',
+            }} />
           </div>
         </div>
 
-        {/* Current point instruction */}
-        <div style={{ padding: 8, background: '#f0f4ff', borderRadius: 6, fontSize: 12, color: '#555' }}>
-          {pointMode === 'corners' ? (
-            corners.length < 4 ? (
-              <>Click <strong>{labels[corners.length]}</strong> corner on the video</>
-            ) : (
-              <span style={{ color: '#00b894' }}>All 4 corners set ✓</span>
-            )
+        {/* Current instruction */}
+        <div style={{
+          padding: 10, borderRadius: 6, fontSize: 12,
+          background: progress >= 12 ? '#f0fff4' : '#f0f4ff',
+          border: `1px solid ${progress >= 12 ? '#00b894' : '#74b9ff'}`,
+          color: progress >= 12 ? '#00b894' : '#333',
+        }}>
+          {progress < 12 ? (
+            <>Click: <strong>{currentLabel}</strong></>
           ) : (
-            netPoints.length < 2 ? (
-              <>Click <strong>{labels[netPoints.length]}</strong> post on the video</>
-            ) : (
-              <span style={{ color: '#00b894' }}>Both net posts set ✓</span>
-            )
+            <strong>All 12 keypoints set — ready to save!</strong>
           )}
         </div>
 
-        {/* Point list */}
-        <div style={{ fontSize: 11, color: '#888' }}>
-          {corners.map((c, i) => (
-            <div key={`c${i}`}>Corner {i + 1}: ({Math.round(c[0])}, {Math.round(c[1])})</div>
-          ))}
-          {netPoints.map((c, i) => (
-            <div key={`n${i}`} style={{ color: '#6c5ce7' }}>Net {i + 1}: ({Math.round(c[0])}, {Math.round(c[1])})</div>
-          ))}
+        {/* Keypoint diagram */}
+        <div style={{ fontSize: 10, fontFamily: 'monospace', background: '#1a2332', color: '#8899aa', padding: 8, borderRadius: 6, lineHeight: 1.6 }}>
+          <div style={{ textAlign: 'center' }}>
+            <span style={{ color: progress > 10 ? '#00b894' : '#555' }}>K11</span>
+            ──────────────────
+            <span style={{ color: progress > 11 ? '#00b894' : '#555' }}>K12</span>
+          </div>
+          <div style={{ textAlign: 'center' }}>│ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; │</div>
+          <div style={{ textAlign: 'center' }}>
+            <span style={{ color: progress > 7 ? '#00b894' : '#555' }}>K8</span>
+            ────
+            <span style={{ color: progress > 8 ? '#00b894' : '#555' }}>K9</span>
+            ────
+            <span style={{ color: progress > 9 ? '#00b894' : '#555' }}>K10</span>
+          </div>
+          <div style={{ textAlign: 'center' }}>│ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; │ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; │</div>
+          <div style={{ textAlign: 'center', color: '#fdcb6e' }}>
+            <span style={{ color: progress > 5 ? '#00b894' : '#fdcb6e' }}>K6</span>
+            ───── NET ─────
+            <span style={{ color: progress > 6 ? '#00b894' : '#fdcb6e' }}>K7</span>
+          </div>
+          <div style={{ textAlign: 'center' }}>│ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; │ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; │</div>
+          <div style={{ textAlign: 'center' }}>
+            <span style={{ color: progress > 2 ? '#00b894' : '#555' }}>K3</span>
+            ────
+            <span style={{ color: progress > 3 ? '#00b894' : '#555' }}>K4</span>
+            ────
+            <span style={{ color: progress > 4 ? '#00b894' : '#555' }}>K5</span>
+          </div>
+          <div style={{ textAlign: 'center' }}>│ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; │</div>
+          <div style={{ textAlign: 'center' }}>
+            <span style={{ color: progress > 0 ? '#00b894' : '#555' }}>K1</span>
+            ──────────────────
+            <span style={{ color: progress > 1 ? '#00b894' : '#555' }}>K2</span>
+          </div>
         </div>
 
         {/* 2D court preview */}
-        <div style={{ height: 150 }}><CourtMiniMap players={previewPlayers} /></div>
+        <div style={{ height: 130 }}><CourtMiniMap players={previewDots} /></div>
 
         {error && <div style={{ padding: 8, background: '#fff3f3', border: '1px solid #e17055', borderRadius: 6, color: '#e17055', fontSize: 12 }}>{error}</div>}
 
         {/* Actions */}
         <div style={{ display: 'flex', gap: 6 }}>
           <button className="btn btn-outline" style={{ flex: 1, fontSize: 11 }} onClick={() => {
-            setCorners([]); setNetPoints([]); setPointMode('corners');
-          }}>Reset All</button>
+            if (keypoints.length > 0) setKeypoints(keypoints.slice(0, -1));
+          }}>Undo Last</button>
+          <button className="btn btn-outline" style={{ flex: 1, fontSize: 11 }} onClick={() => setKeypoints([])}>
+            Reset All
+          </button>
           <button className="btn btn-success" style={{ flex: 1, fontSize: 11 }} onClick={handleSave}
-            disabled={corners.length !== 4 || saving}>
-            {saving ? 'Saving...' : 'Save & Upload'}
+            disabled={keypoints.length < 4 || saving}>
+            {saving ? 'Saving...' : `Save (${progress}pt)`}
           </button>
         </div>
 
+        {/* Minimum notice */}
+        {progress >= 4 && progress < 12 && (
+          <div style={{ fontSize: 11, color: '#888' }}>
+            Min 4 points to save. {12 - progress} more for best accuracy.
+          </div>
+        )}
+
         {/* Save as template */}
-        {corners.length === 4 && !showSaveTemplate && (
+        {keypoints.length >= 4 && !showSaveTemplate && (
           <button className="btn btn-outline" style={{ fontSize: 11 }} onClick={() => setShowSaveTemplate(true)}>
             Save as Template
           </button>
@@ -251,12 +258,8 @@ const Calibration: React.FC = () => {
         {saved && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: 12, background: '#f0fff4', border: '1px solid #00b894', borderRadius: 8 }}>
             <div style={{ fontSize: 13, color: '#00b894', fontWeight: 500 }}>Calibration saved!</div>
-            <button className="btn btn-primary" onClick={() => navigate(`/match/${id}/analyze`)}>
-              Analyze Video →
-            </button>
-            <button className="btn btn-outline" onClick={() => navigate(`/match/${id}/live`)}>
-              Go Live →
-            </button>
+            <button className="btn btn-primary" onClick={() => navigate(`/match/${id}/analyze`)}>Analyze Video →</button>
+            <button className="btn btn-outline" onClick={() => navigate(`/match/${id}/live`)}>Go Live →</button>
           </div>
         )}
       </div>

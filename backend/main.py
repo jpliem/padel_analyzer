@@ -35,8 +35,8 @@ class MatchSetupRequest(BaseModel):
 
 
 class CalibrationRequest(BaseModel):
-    corners: List[List[float]]
-    net_points: Optional[List[List[float]]] = None
+    corners: List[List[float]]  # 4 corners (legacy) or 12 keypoints
+    net_points: Optional[List[List[float]]] = None  # 2 net posts (legacy mode only)
 
 
 def _match_dir(match_id: str) -> str:
@@ -110,21 +110,30 @@ def get_match(match_id: str):
 
 @app.post("/match/{match_id}/calibrate")
 def calibrate_court(match_id: str, req: CalibrationRequest):
-    if len(req.corners) != 4:
-        raise HTTPException(status_code=400, detail="Exactly 4 corner points required")
     import numpy as np
     from cv.court_calibration import CourtCalibration
     cal = CourtCalibration()
-    net = np.array(req.net_points, dtype=np.float32) if req.net_points else None
-    cal.calibrate(np.array(req.corners, dtype=np.float32), net_pixels=net)
+
+    n_points = len(req.corners)
+    if n_points >= 12:
+        # 12-keypoint mode (best accuracy)
+        cal.calibrate_keypoints(req.corners)
+    elif n_points == 4:
+        # Legacy 4-corner mode with optional net points
+        net = np.array(req.net_points, dtype=np.float32) if req.net_points else None
+        cal.calibrate(np.array(req.corners, dtype=np.float32), net_pixels=net)
+    else:
+        raise HTTPException(status_code=400, detail=f"Need 4 corners or 12 keypoints, got {n_points}")
+
     match_data = _load_match(match_id)
     match_data["calibration"] = cal.to_dict()
     match_data["calibration_points"] = {
         "corners": req.corners,
         "net_points": req.net_points,
+        "mode": "12-keypoint" if n_points >= 12 else "4-corner",
     }
     _save_match(match_id, match_data)
-    return {"status": "calibrated", "match_id": match_id}
+    return {"status": "calibrated", "match_id": match_id, "mode": "12-keypoint" if n_points >= 12 else "4-corner"}
 
 
 @app.delete("/match/{match_id}/analysis")
