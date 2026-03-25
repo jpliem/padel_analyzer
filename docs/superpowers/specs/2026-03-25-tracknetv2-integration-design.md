@@ -33,39 +33,54 @@ Implements `BallDetector` ABC with internal 3-frame buffer:
 
 ```python
 class TrackNetBallDetector(BallDetector):
+    HEATMAP_W, HEATMAP_H = 640, 360
+
     def __init__(self, model_path: str, conf_threshold: float = 0.5,
                  yolo_fallback: Optional[YoloBallDetector] = None):
+        self._device_str = get_device()
+        self._torch_device = torch.device(self._device_str)
         self._model = TrackNetV2Model()
-        self._model.load_state_dict(torch.load(model_path))
+        self._model.load_state_dict(torch.load(model_path, map_location=self._torch_device))
+        self._model.to(self._torch_device)
+        self._model.eval()
         self._buffer: List[np.ndarray] = []  # last 3 frames
         self._conf_threshold = conf_threshold
-        self._yolo_fallback = yolo_fallback  # optional YOLO for low-confidence frames
+        self._yolo_fallback = yolo_fallback
 
     def detect(self, frame: np.ndarray, frame_id: int = 0) -> Optional[List[float]]:
         self._buffer.append(frame)
         if len(self._buffer) > 3:
             self._buffer.pop(0)
         if len(self._buffer) < 3:
-            # Not enough frames yet — use YOLO fallback if available
             if self._yolo_fallback:
                 return self._yolo_fallback.detect(frame, frame_id)
             return None
 
-        # Run TrackNet inference
         heatmap = self._infer(self._buffer)
-        peak_conf, peak_x, peak_y = self._find_peak(heatmap)
+        peak_conf, peak_y, peak_x = self._find_peak(heatmap)  # note: y, x (row, col)
 
         if peak_conf >= self._conf_threshold:
-            # Convert heatmap coords to original frame coords
-            # Return as [x1, y1, x2, y2] bbox (small box around center)
+            # Scale from heatmap resolution to original frame resolution
+            frame_h, frame_w = frame.shape[:2]
+            scale_x = frame_w / self.HEATMAP_W
+            scale_y = frame_h / self.HEATMAP_H
+            cx = peak_x * scale_x
+            cy = peak_y * scale_y
             radius = 10
-            return [peak_x - radius, peak_y - radius,
-                    peak_x + radius, peak_y + radius]
+            return [cx - radius, cy - radius, cx + radius, cy + radius]
 
-        # Low confidence — fall back to YOLO
         if self._yolo_fallback:
             return self._yolo_fallback.detect(frame, frame_id)
         return None
+
+    def warm_up(self) -> None:
+        """Run dummy inference without touching the frame buffer."""
+        dummy_frames = [np.zeros((360, 640, 3), dtype=np.uint8)] * 3
+        self._infer(dummy_frames)
+
+    @property
+    def device(self) -> str:
+        return self._device_str
 ```
 
 ### Detector Selection in VideoAnalyzer
@@ -73,9 +88,19 @@ class TrackNetBallDetector(BallDetector):
 `VideoAnalyzer.__init__` accepts `detector_type: str = "yolo"`:
 
 - `"yolo"` (default): Current behavior — `UnifiedYoloDetector` → `YoloBallDetector`
-- `"tracknet"`: `TrackNetBallDetector` with YOLO fallback for first 2 frames and low-confidence frames
+- `"tracknet"`: Creates `TrackNetBallDetector` with the shared `UnifiedYoloDetector`'s `YoloBallDetector` as fallback. The same `UnifiedYoloDetector` instance is reused (it caches by frame_id, so no double inference).
 
 The player detector always uses YOLO regardless of ball detector choice.
+
+### API Wiring
+
+Add optional `detector_type: str = "yolo"` field to the `/analyze/upload` endpoint request (since it creates the job config). The value is stored in `_analysis_jobs[job_id]` and read by `start_analysis` when creating the `VideoAnalyzer`.
+
+### Test Strategy Note
+
+Tests must mock the model (don't load real weights). Either:
+- Pass a pre-constructed mock model to the constructor, or
+- Patch `torch.load` in the test to return mock weights
 
 ### Weight Management
 
