@@ -9,6 +9,8 @@ from cv.detectors.yolo import UnifiedYoloDetector, YoloBallDetector, YoloPlayerD
 from cv.detectors.tracknet import TrackNetBallDetector
 from cv.ball_tracker import BallTracker
 from cv.player_tracker import PlayerTracker
+from cv.court_detector import CourtDetector
+from cv.court_calibration import CourtCalibration
 from logic.event_detector import EventDetector
 from logic.scoring_engine import PadelScoringEngine
 
@@ -72,14 +74,50 @@ class VideoAnalyzer:
         )
 
         self._config = config
+        self._calibration = calibration
         self._match_id = match_id
         self._auto_assigned = False
         self._frame_count = 0
         self.all_events: List[MatchEvent] = []
-        self.player_positions_log: List[Dict] = []  # per-frame player positions
+        self.player_positions_log: List[Dict] = []
+
+        # Auto court detection — update calibration per frame
+        import os
+        court_model_path = "models/court_keypoints.pt"
+        if os.path.exists(court_model_path):
+            try:
+                self._court_detector = CourtDetector(model_path=court_model_path)
+                self._auto_court = True
+            except Exception:
+                self._court_detector = None
+                self._auto_court = False
+        else:
+            self._court_detector = None
+            self._auto_court = False
+
+    def _update_calibration(self, frame: np.ndarray) -> None:
+        """Auto-detect court keypoints and update homography."""
+        if not self._auto_court or self._court_detector is None:
+            return
+        keypoints = self._court_detector.detect(frame)
+        if keypoints and len(keypoints) == 12:
+            try:
+                cal = CourtCalibration()
+                cal.calibrate_keypoints(keypoints)
+                # Update all components that use calibration
+                self.ball_tracker.calibration = cal
+                self.player_tracker.calibration = cal
+                self._calibration = cal
+            except Exception:
+                pass  # Keep previous calibration on error
 
     def process_frame(self, frame: np.ndarray, frame_no: int) -> FrameResult:
         self._frame_count = frame_no
+
+        # Update calibration from auto-detected keypoints (every 5 frames to save compute)
+        if frame_no % 5 == 0:
+            self._update_calibration(frame)
+
         ball_bbox = self.ball_detector.detect(frame, frame_no)
         player_detections = self.player_detector.detect(frame, frame_no)
         ball_pos = self.ball_tracker.update(ball_bbox, frame_no)
