@@ -187,6 +187,18 @@ def get_trajectory(match_id: str):
     return {"trajectory": []}
 
 
+@app.get("/match/{match_id}/positions")
+def get_positions(match_id: str):
+    _load_match(match_id)
+    analyzer = _active_analyzers.get(match_id)
+    if analyzer is not None:
+        return {"positions": analyzer.player_positions_log}
+    saved = _load_results(match_id)
+    if saved and "player_positions" in saved:
+        return {"positions": saved["player_positions"]}
+    return {"positions": []}
+
+
 @app.get("/match/{match_id}/annotated")
 def get_annotated_video(match_id: str):
     _load_match(match_id)
@@ -301,6 +313,7 @@ def start_analysis(job_id: str, background_tasks: BackgroundTasks):
                         for e in analyzer.all_events
                     ],
                     "trajectory": analyzer.ball_tracker.trajectory,
+                    "player_positions": analyzer.player_positions_log,
                     "frames_processed": result.get("frames_processed", 0),
                 }, f)
         except Exception as e:

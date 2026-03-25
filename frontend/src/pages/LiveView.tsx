@@ -104,7 +104,7 @@ const LiveView: React.FC = () => {
             <Separator style={{ height: 4, background: '#e0e0e0', cursor: 'row-resize' }} />
             <Panel defaultSize={50} minSize={15}>
               <div style={{ height: '100%' }}>
-                <CourtMiniMap height={300} />
+                <CourtMiniMap />
               </div>
             </Panel>
           </Group>

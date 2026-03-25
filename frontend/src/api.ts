@@ -60,6 +60,10 @@ export async function getAnalysisStatus(jobId: string): Promise<AnalysisStatus> 
   return fetchJSON(`${API}/analyze/status/${jobId}`);
 }
 
+export async function getPositions(id: string): Promise<{ positions: any[] }> {
+  return fetchJSON(`${API}/match/${id}/positions`);
+}
+
 export async function getScore(id: string): Promise<ScoreData> {
   return fetchJSON(`${API}/match/${id}/score`);
 }

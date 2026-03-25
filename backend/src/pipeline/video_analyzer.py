@@ -76,6 +76,7 @@ class VideoAnalyzer:
         self._auto_assigned = False
         self._frame_count = 0
         self.all_events: List[MatchEvent] = []
+        self.player_positions_log: List[Dict] = []  # per-frame player positions
 
     def process_frame(self, frame: np.ndarray, frame_no: int) -> FrameResult:
         self._frame_count = frame_no
@@ -90,6 +91,16 @@ class VideoAnalyzer:
 
         events = self.event_detector.process(ball_pos, player_pos, frame_no)
         self.all_events.extend(events)
+
+        # Log player positions per frame (lightweight: just court coords)
+        self.player_positions_log.append({
+            "frame": frame_no,
+            "players": [
+                {"track_id": p["track_id"], "x": p["x"], "y": p["y"],
+                 "player_id": self.player_tracker.get_player_id(p["track_id"])}
+                for p in player_pos
+            ],
+        })
 
         return FrameResult(
             ball_position=ball_pos,

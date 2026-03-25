@@ -38,7 +38,7 @@ const Calibration: React.FC = () => {
       </div>
       <div style={{ flex: 1, minWidth: 280, padding: 16, display: 'flex', flexDirection: 'column', gap: 12, background: '#fafafa', borderLeft: '1px solid #e0e0e0' }}>
         <h2 style={{ fontSize: 16, fontWeight: 600 }}>Court Calibration</h2>
-        <CourtMiniMap height={200} />
+        <div style={{ height: 200 }}><CourtMiniMap /></div>
         <div>
           <div className="label">Video Source</div>
           <input type="file" accept="video/*" onChange={e => {
