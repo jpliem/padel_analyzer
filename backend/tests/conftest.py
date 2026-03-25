@@ -45,3 +45,24 @@ def court_real_coords():
         [10, 20],
         [0, 20],
     ], dtype=np.float32)
+
+
+@pytest.fixture
+def court_model():
+    from models.court_model import PadelCourtModel
+    return PadelCourtModel()
+
+
+@pytest.fixture
+def calibrated_camera_model():
+    from cv.camera_model import CameraModel
+    cam = CameraModel()
+    keypoints = [
+        [100, 600], [900, 600],
+        [200, 450], [500, 450], [800, 450],
+        [250, 350], [750, 350],
+        [200, 250], [500, 250], [800, 250],
+        [100, 100], [900, 100],
+    ]
+    cam.calibrate(keypoints, image_width=1000, image_height=700)
+    return cam
