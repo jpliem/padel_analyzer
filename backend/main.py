@@ -199,6 +199,63 @@ def get_positions(match_id: str):
     return {"positions": []}
 
 
+@app.post("/match/{match_id}/analyze")
+def start_match_analysis(match_id: str, background_tasks: BackgroundTasks,
+                         detector_type: str = "tracknet"):
+    """One-click analysis: checks if video exists on disk, starts processing."""
+    match_data = _load_match(match_id)
+    video_path = os.path.join(_match_dir(match_id), "video.mp4")
+    if not os.path.exists(video_path):
+        raise HTTPException(status_code=400, detail="No video uploaded for this match")
+
+    import numpy as np
+    from cv.court_calibration import CourtCalibration
+    from models.config import EventDetectorConfig
+    from pipeline.video_analyzer import VideoAnalyzer
+
+    cal = CourtCalibration()
+    if match_data.get("calibration"):
+        cal = CourtCalibration.from_dict(match_data["calibration"])
+
+    config = EventDetectorConfig()
+    analyzer = VideoAnalyzer(match_id=match_id, calibration=cal, config=config,
+                             detector_type=detector_type)
+    _active_analyzers[match_id] = analyzer
+    _analysis_jobs[match_id] = {"state": "processing", "percent": 0, "match_id": match_id}
+
+    def progress_cb(frame, total, pct):
+        _analysis_jobs[match_id]["percent"] = round(pct, 1)
+
+    def run():
+        try:
+            annotated_path = os.path.join(_match_dir(match_id), "annotated.mp4")
+            result = analyzer.analyze_video(video_path, progress_callback=progress_cb,
+                                            annotated_path=annotated_path)
+            _analysis_jobs[match_id]["state"] = "complete"
+            _analysis_jobs[match_id]["percent"] = 100
+            results_file = os.path.join(_match_dir(match_id), "results.json")
+            with open(results_file, "w") as f:
+                json.dump({
+                    "score": analyzer.scoring_engine.get_score_display(),
+                    "events": [
+                        {"event_type": e.event_type.value, "timestamp": e.timestamp,
+                         "frame_number": e.frame_number,
+                         "position": {"x": e.position.x, "y": e.position.y},
+                         "metadata": e.metadata}
+                        for e in analyzer.all_events
+                    ],
+                    "trajectory": analyzer.ball_tracker.trajectory,
+                    "player_positions": analyzer.player_positions_log,
+                    "frames_processed": result.get("frames_processed", 0),
+                }, f)
+        except Exception as e:
+            _analysis_jobs[match_id]["state"] = "error"
+            _analysis_jobs[match_id]["error"] = str(e)
+
+    background_tasks.add_task(run)
+    return {"status": "started", "match_id": match_id}
+
+
 @app.get("/match/{match_id}/annotated")
 def get_annotated_video(match_id: str):
     _load_match(match_id)

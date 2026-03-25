@@ -56,6 +56,10 @@ export async function startAnalysis(jobId: string): Promise<void> {
   await fetchJSON(`${API}/analyze/start/${jobId}`, { method: 'POST' });
 }
 
+export async function startMatchAnalysis(matchId: string): Promise<void> {
+  await fetchJSON(`${API}/match/${matchId}/analyze`, { method: 'POST' });
+}
+
 export async function getAnalysisStatus(jobId: string): Promise<AnalysisStatus> {
   return fetchJSON(`${API}/analyze/status/${jobId}`);
 }
