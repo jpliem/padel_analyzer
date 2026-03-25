@@ -123,6 +123,15 @@ def calibrate_court(match_id: str, req: CalibrationRequest):
 _active_analyzers: Dict[str, object] = {}
 
 
+def _load_results(match_id: str) -> dict | None:
+    """Load saved analysis results from disk."""
+    path = os.path.join(_match_dir(match_id), "results.json")
+    if os.path.exists(path):
+        with open(path) as f:
+            return json.load(f)
+    return None
+
+
 class CorrectScoreRequest(BaseModel):
     team: int
 
@@ -136,36 +145,45 @@ class AssignPlayerRequest(BaseModel):
 def get_score(match_id: str):
     _load_match(match_id)
     analyzer = _active_analyzers.get(match_id)
-    if analyzer is None:
-        return {"score": "0 - 0", "games": "0 - 0", "sets": "0 - 0"}
-    return analyzer.scoring_engine.get_score_display()
+    if analyzer is not None:
+        return analyzer.scoring_engine.get_score_display()
+    saved = _load_results(match_id)
+    if saved and "score" in saved:
+        return saved["score"]
+    return {"score": "0 - 0", "games": "0 - 0", "sets": "0 - 0"}
 
 
 @app.get("/match/{match_id}/events")
 def get_events(match_id: str):
     _load_match(match_id)
     analyzer = _active_analyzers.get(match_id)
-    if analyzer is None:
-        return {"events": []}
-    return {"events": [
-        {
-            "event_type": e.event_type.value,
-            "timestamp": e.timestamp,
-            "frame_number": e.frame_number,
-            "position": {"x": e.position.x, "y": e.position.y},
-            "metadata": e.metadata,
-        }
-        for e in analyzer.all_events
-    ]}
+    if analyzer is not None:
+        return {"events": [
+            {
+                "event_type": e.event_type.value,
+                "timestamp": e.timestamp,
+                "frame_number": e.frame_number,
+                "position": {"x": e.position.x, "y": e.position.y},
+                "metadata": e.metadata,
+            }
+            for e in analyzer.all_events
+        ]}
+    saved = _load_results(match_id)
+    if saved and "events" in saved:
+        return {"events": saved["events"]}
+    return {"events": []}
 
 
 @app.get("/match/{match_id}/trajectory")
 def get_trajectory(match_id: str):
     _load_match(match_id)
     analyzer = _active_analyzers.get(match_id)
-    if analyzer is None:
-        return {"trajectory": []}
-    return {"trajectory": analyzer.ball_tracker.trajectory}
+    if analyzer is not None:
+        return {"trajectory": analyzer.ball_tracker.trajectory}
+    saved = _load_results(match_id)
+    if saved and "trajectory" in saved:
+        return {"trajectory": saved["trajectory"]}
+    return {"trajectory": []}
 
 
 @app.get("/match/{match_id}/stats")
@@ -249,6 +267,24 @@ def start_analysis(job_id: str, background_tasks: BackgroundTasks):
             result = analyzer.analyze_video(video_path, progress_callback=progress_cb)
             _analysis_jobs[job_id]["state"] = "complete"
             _analysis_jobs[job_id]["percent"] = 100
+            # Save results to disk so they persist across server restarts
+            results_file = os.path.join(_match_dir(match_id), "results.json")
+            with open(results_file, "w") as f:
+                json.dump({
+                    "score": analyzer.scoring_engine.get_score_display(),
+                    "events": [
+                        {
+                            "event_type": e.event_type.value,
+                            "timestamp": e.timestamp,
+                            "frame_number": e.frame_number,
+                            "position": {"x": e.position.x, "y": e.position.y},
+                            "metadata": e.metadata,
+                        }
+                        for e in analyzer.all_events
+                    ],
+                    "trajectory": analyzer.ball_tracker.trajectory,
+                    "frames_processed": result.get("frames_processed", 0),
+                }, f)
         except Exception as e:
             _analysis_jobs[job_id]["state"] = "error"
             _analysis_jobs[job_id]["error"] = str(e)

@@ -67,11 +67,13 @@ const OfflineAnalysis: React.FC = () => {
     }
   };
 
+  // Load existing results on mount (when navigating back to an analyzed match)
   useEffect(() => {
     if (!id) return;
     Promise.all([getScore(id), getEvents(id), getTrajectory(id)])
       .then(([s, e, t]) => {
-        if (e.events.length > 0) {
+        // Show results if we have trajectory OR events (trajectory-only is valid)
+        if (e.events.length > 0 || t.trajectory.length > 0) {
           setScore(s);
           setEvents(e.events);
           setTrajectory(t.trajectory);
