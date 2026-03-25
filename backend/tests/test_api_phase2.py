@@ -60,3 +60,13 @@ class TestAnalyzeStatus:
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             resp = await client.get("/analyze/status/nonexistent")
             assert resp.status_code == 404
+
+
+class TestListMatches:
+    @pytest.mark.asyncio
+    async def test_list_matches_empty(self, transport):
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/matches")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert "matches" in data

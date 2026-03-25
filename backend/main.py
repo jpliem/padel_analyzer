@@ -61,6 +61,30 @@ def root():
     return {"status": "ok", "service": "padel-analyzer"}
 
 
+@app.get("/matches")
+def list_matches():
+    if not os.path.exists(DATA_DIR):
+        return {"matches": []}
+    matches = []
+    for match_id in os.listdir(DATA_DIR):
+        config_path = os.path.join(DATA_DIR, match_id, "config.json")
+        if os.path.exists(config_path):
+            with open(config_path) as f:
+                config = json.load(f)
+            status = "created"
+            if config.get("calibration"):
+                status = "calibrated"
+            results_path = os.path.join(DATA_DIR, match_id, "results.json")
+            if os.path.exists(results_path) or match_id in _active_analyzers:
+                status = "analyzed"
+            matches.append({
+                "match_id": match_id,
+                "match_name": config.get("match_name", "Unknown"),
+                "status": status,
+            })
+    return {"matches": matches}
+
+
 @app.post("/match/setup")
 def create_match(req: MatchSetupRequest):
     match_id = str(uuid.uuid4())[:8]
