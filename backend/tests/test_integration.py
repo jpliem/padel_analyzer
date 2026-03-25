@@ -30,7 +30,8 @@ class TestPipelineIntegration:
     def test_calibration_feeds_player_tracker(self, calibrated_court):
         """Test that a calibrated court feeds into PlayerTracker correctly."""
         tracker = PlayerTracker(calibrated_court)
-        dets = np.array([[100, 200, 160, 400, 0.9, 0]])
+        # Detection bbox must map to on-court position (pixel 900-1020, y=600 = court ~5,1.7)
+        dets = np.array([[900, 300, 1020, 600, 0.9, 0]])
         positions = tracker.update(dets, frame_number=0)
         assert len(positions) == 1
 
