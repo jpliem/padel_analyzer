@@ -97,3 +97,37 @@ class MatchEvent:
     position: CourtPoint
     confidence: float = 0.0
     metadata: Dict = field(default_factory=dict)
+
+
+@dataclass
+class CameraObservation:
+    """Per-frame observation from a single camera."""
+    camera_id: str
+    ball_pixel: Optional[tuple] = None       # (px, py) raw pixel center
+    ball_bbox: Optional[list] = None         # [x1, y1, x2, y2] raw pixel bbox
+    ball_court: Optional[BallPosition] = None  # Projected to court coords
+    confidence: float = 0.0
+    player_detections: List[Dict] = field(default_factory=list)  # pixel + court
+    timestamp: float = 0.0
+    frame_number: int = 0
+
+
+@dataclass
+class WorldState:
+    """Fused world state from all cameras for a single frame."""
+    ball: Optional[BallPosition] = None
+    ball_velocity: Optional[tuple] = None  # (vx, vy, vz) in m/s
+    players: List[PlayerPosition] = field(default_factory=list)
+    contributing_cameras: List[str] = field(default_factory=list)
+    timestamp: float = 0.0
+    frame_number: int = 0
+
+
+@dataclass
+class WallHitMetadata:
+    """Metadata for a wall hit event."""
+    wall_id: str = ""
+    surface_type: str = ""
+    impact_point: tuple = (0.0, 0.0, 0.0)
+    speed_at_impact: float = 0.0
+    incoming_angle: float = 0.0
