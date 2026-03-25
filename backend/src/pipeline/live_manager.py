@@ -3,14 +3,27 @@ import base64
 import cv2
 import numpy as np
 import threading
-from typing import Optional, Dict, List
-from pipeline.video_analyzer import VideoAnalyzer, FrameResult
+from typing import TYPE_CHECKING, Optional, Dict, List
 from pipeline.replay_buffer import ReplayBuffer
+from pipeline.world_fusion import WorldFusion
+from cv.camera_node import CameraNode
+from models.court_model import PadelCourtModel
+
+if TYPE_CHECKING:
+    from pipeline.video_analyzer import VideoAnalyzer, FrameResult
 
 
 class LiveManager:
-    def __init__(self, analyzer: VideoAnalyzer, device_id=0,
-                 record: bool = False, record_path: str = None):
+    def __init__(self, analyzer: "VideoAnalyzer" = None, device_id=0,
+                 record: bool = False, record_path: str = None,
+                 camera_nodes: Optional[List[CameraNode]] = None,
+                 court_model: Optional[PadelCourtModel] = None):
+        # Multi-camera mode when camera_nodes are provided
+        self._camera_nodes = camera_nodes or []
+        self._court_model = court_model
+        self._world_fusion = WorldFusion(court_model) if court_model and camera_nodes else None
+
+        # Single-camera mode (backward compat)
         self._analyzer = analyzer
         self._device_id = device_id
         self._replay_buffer = ReplayBuffer(max_frames=900)
@@ -18,7 +31,7 @@ class LiveManager:
         self._thread: Optional[threading.Thread] = None
         self._cap: Optional[cv2.VideoCapture] = None
         self._frame_no = 0
-        self._latest_result: Optional[FrameResult] = None
+        self._latest_result: Optional["FrameResult"] = None
         self._latest_jpeg: Optional[bytes] = None
         self._record = record
         self._record_path = record_path
