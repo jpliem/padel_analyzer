@@ -55,12 +55,32 @@ const Calibration: React.FC = () => {
     }
   };
 
+  const handleSkipAutoDetect = async () => {
+    if (!id) return;
+    setSaving(true);
+    setError(null);
+    try {
+      if (videoFile) {
+        await uploadVideo(id, videoFile);
+      }
+      // Save a minimal calibration so the match shows as "calibrated"
+      // Auto-detection during analysis will override this
+      await calibrate(id, [
+        [0, 0], [1, 0], [1, 1], [0, 1],  // dummy corners
+      ]);
+      setSaved(true);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleSave = async () => {
     if (!id || keypoints.length < 4) return;
     setSaving(true);
     setError(null);
     try {
-      // Send ground keypoints + optional net top points for 3D camera model
       await calibrate(id, keypoints, null, netTopPoints.length === 2 ? netTopPoints : null);
       if (videoFile) {
         await uploadVideo(id, videoFile);
@@ -129,7 +149,24 @@ const Calibration: React.FC = () => {
 
       {/* Right: Controls */}
       <div style={{ flex: 1, minWidth: 300, padding: 16, display: 'flex', flexDirection: 'column', gap: 8, background: '#fafafa', borderLeft: '1px solid #e0e0e0', overflow: 'auto' }}>
-        <h2 style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>Court Calibration (12 Keypoints)</h2>
+        <h2 style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>Court Calibration</h2>
+
+        {/* Auto-detect option */}
+        {!saved && videoFile && keypoints.length === 0 && (
+          <button
+            className="btn btn-success"
+            style={{ width: '100%', padding: 12, fontSize: 14 }}
+            onClick={handleSkipAutoDetect}
+            disabled={saving}
+          >
+            {saving ? 'Setting up...' : 'Auto-Detect Court Lines (Recommended)'}
+          </button>
+        )}
+        {!saved && videoFile && keypoints.length === 0 && (
+          <div style={{ textAlign: 'center', fontSize: 12, color: '#888' }}>
+            — or click court keypoints manually below —
+          </div>
+        )}
 
         {/* Templates */}
         {templates.length > 0 && (
