@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { calibrate } from '../api';
+import { calibrate, uploadVideo } from '../api';
 import CalibrationCanvas from '../components/CalibrationCanvas';
 import CourtMiniMap from '../components/CourtMiniMap';
 
@@ -23,6 +23,10 @@ const Calibration: React.FC = () => {
     setError(null);
     try {
       await calibrate(id, corners);
+      // Also upload the video so analysis page doesn't need to re-upload
+      if (videoFile) {
+        await uploadVideo(id, videoFile);
+      }
       setSaved(true);
     } catch (err: any) {
       setError(err.message);

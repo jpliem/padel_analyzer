@@ -118,7 +118,7 @@ const OfflineAnalysis: React.FC = () => {
     }
   };
 
-  // Load existing results on mount
+  // Load existing results on mount, or auto-start if video was uploaded during calibration
   useEffect(() => {
     if (!id) return;
     Promise.all([getScore(id), getEvents(id), getTrajectory(id), getPositions(id)])
@@ -129,6 +129,39 @@ const OfflineAnalysis: React.FC = () => {
           setTrajectory(t.trajectory);
           setPositions(p.positions);
           setStatus('complete');
+        } else {
+          // No results yet — check if video was already uploaded (from calibration)
+          // Try to start analysis directly
+          startAnalysis(id)
+            .then(() => {
+              setStatus('processing');
+              const poll = setInterval(async () => {
+                try {
+                  const st = await getAnalysisStatus(id);
+                  setPercent(st.percent);
+                  if (st.state === 'complete') {
+                    clearInterval(poll);
+                    setStatus('complete');
+                    const [sd, ed, td, pd] = await Promise.all([
+                      getScore(id), getEvents(id), getTrajectory(id), getPositions(id),
+                    ]);
+                    setScore(sd);
+                    setEvents(ed.events);
+                    setTrajectory(td.trajectory);
+                    setPositions(pd.positions);
+                  } else if (st.state === 'error') {
+                    clearInterval(poll);
+                    setStatus('error');
+                    setError(st.error || 'Analysis failed');
+                  }
+                } catch {
+                  clearInterval(poll);
+                }
+              }, 1000);
+            })
+            .catch(() => {
+              // No video uploaded yet — user needs to upload manually
+            });
         }
       })
       .catch(() => {});
