@@ -122,7 +122,21 @@ const OfflineAnalysis: React.FC = () => {
           <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
             <Scoreboard score={score} />
             <EventLog events={events} onEventClick={seekToEvent} />
-            <CourtMiniMap height={140} />
+            <CourtMiniMap
+              height={140}
+              ballTrail={trajectory.slice(-50).map(p => ({ x: p.x, y: p.y }))}
+              ballPosition={trajectory.length > 0 ? { x: trajectory[trajectory.length - 1].x, y: trajectory[trajectory.length - 1].y } : null}
+            />
+            {status === 'complete' && (
+              <div style={{ padding: '8px 12px', background: '#f8f8f8', borderTop: '1px solid #e8e8e8', fontSize: 12, color: '#888' }}>
+                Trajectory: {trajectory.length} points | Events: {events.length}
+                {events.length === 0 && trajectory.length > 0 && (
+                  <div style={{ color: '#e17055', marginTop: 4 }}>
+                    Ball detected but too sparse for event detection. TrackNetV2 needed for reliable scoring.
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </Panel>
       </Group>
