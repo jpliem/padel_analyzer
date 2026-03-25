@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 from cv.ball_tracker import BallTracker
 from cv.court_calibration import CourtCalibration
+from cv.camera_model import CameraModel
 
 
 @pytest.fixture
@@ -72,3 +73,29 @@ class TestZEstimation:
         # Z should be > 0 after ball moved upward
         z = tracker.trajectory[-1]["z"]
         assert z >= 0  # Z estimation is active
+
+
+class TestCameraModelCompatibility:
+    def test_constructs_with_uncalibrated_camera_model(self):
+        """BallTracker should accept an uncalibrated CameraModel without error."""
+        cam = CameraModel()
+        tracker = BallTracker(cam, fps=30)
+        assert tracker.calibration is cam
+
+    def test_constructs_with_calibrated_camera_model(self, sample_court_corners_pixels):
+        """BallTracker should accept a calibrated CameraModel (homography only)."""
+        cam = CameraModel()
+        # Provide 4 ground keypoints — enough for homography but not full 3D
+        cam.calibrate(sample_court_corners_pixels[:4].tolist())
+        tracker = BallTracker(cam, fps=30)
+        assert tracker.calibration is cam
+
+    def test_update_with_calibrated_camera_model(self, sample_court_corners_pixels):
+        """BallTracker.update should work when backed by a CameraModel with homography."""
+        cam = CameraModel()
+        # Use all 4 available sample corners for homography calibration
+        cam.calibrate(sample_court_corners_pixels[:4].tolist())
+        tracker = BallTracker(cam, fps=30)
+        pos = tracker.update(bbox=[500, 400, 520, 420], frame_number=0)
+        assert pos is not None
+        assert "x" in pos and "y" in pos
