@@ -145,49 +145,78 @@ class BallTracker:
             return 0.0
 
     def _estimate_z_from_camera(self, px: float, py: float) -> float:
-        """Estimate ball height using pixel-space vertical movement and camera model.
+        """Estimate ball height by fitting parabola vs line to recent pixel-Y trajectory.
 
-        Uses the ball's pixel velocity to determine if it's rising or falling,
-        combined with the camera's pixels-per-meter at the ball's depth to
-        convert pixel displacement to real-world height.
-
-        The key insight: when the ball is on the ground, its pixel Y position
-        changes smoothly with court Y. When it's airborne, it deviates from
-        the expected ground-level trajectory.
+        Key insight: airborne ball follows a parabola in pixel Y (due to gravity).
+        Ground ball follows ~linear pixel Y (just perspective change).
+        By comparing parabola vs line fit over last N frames, we can tell if
+        the ball is in the air and estimate its height from the parabola shape.
         """
         try:
-            if not hasattr(self, '_prev_pixel_y'):
-                self._prev_pixel_y = py
-                self._pixel_z_accumulator = 0.0
+            if not hasattr(self, '_pixel_history'):
+                self._pixel_history = []
+
+            self._pixel_history.append((px, py))
+            if len(self._pixel_history) > 20:
+                self._pixel_history.pop(0)
+
+            # Need at least 6 frames to fit a meaningful curve
+            if len(self._pixel_history) < 6:
                 return 0.0
 
-            # Pixel vertical velocity (negative = moving up in image = ball rising)
-            pixel_vy = py - self._prev_pixel_y
-            self._prev_pixel_y = py
+            # Extract pixel Y values for last N frames
+            ys = np.array([p[1] for p in self._pixel_history])
+            xs = np.arange(len(ys), dtype=np.float64)
 
-            # Estimate pixels-per-meter at current depth
+            # Fit line: y = ax + b
+            line_coeffs = np.polyfit(xs, ys, 1)
+            line_fit = np.polyval(line_coeffs, xs)
+            line_error = np.mean((ys - line_fit) ** 2)
+
+            # Fit parabola: y = ax² + bx + c
+            para_coeffs = np.polyfit(xs, ys, 2)
+            para_fit = np.polyval(para_coeffs, xs)
+            para_error = np.mean((ys - para_fit) ** 2)
+
+            # Parabola "a" coefficient: positive = opening upward in pixel space
+            # = ball went UP then came DOWN (since pixel Y decreases when ball rises)
+            a = para_coeffs[0]
+
+            # Is parabola a significantly better fit than line?
+            # And does it have the right shape (a > 0 = ball arc)?
+            is_airborne = (para_error < line_error * 0.7) and (a > 0.1)
+
+            if not is_airborne:
+                return 0.0
+
+            # Estimate height from parabola
+            # The parabola vertex is at x = -b/(2a), y_vertex = c - b²/(4a)
+            vertex_x = -para_coeffs[1] / (2 * para_coeffs[0])
+            vertex_y = np.polyval(para_coeffs, vertex_x)
+
+            # Current pixel Y vs vertex Y = pixel displacement from peak
+            # Convert to meters using camera model
+            current_y = ys[-1]
+            peak_displacement = abs(vertex_y - np.mean(ys))  # pixel distance from mean
+
+            # Get pixels-per-meter at this depth
             ground_x, ground_y = self.calibration.project_to_ground(px, py)
             try:
-                ground_px, ground_py = self.calibration.court_to_pixel(ground_x, ground_y, 0.0)
-                elevated_px, elevated_py = self.calibration.court_to_pixel(ground_x, ground_y, 1.0)
-                ppm = abs(ground_py - elevated_py)
+                gnd_px, gnd_py = self.calibration.court_to_pixel(ground_x, ground_y, 0.0)
+                elv_px, elv_py = self.calibration.court_to_pixel(ground_x, ground_y, 1.0)
+                ppm = abs(gnd_py - elv_py)
             except Exception:
-                ppm = 50.0  # rough fallback
+                ppm = 50.0
 
             if ppm < 1:
                 ppm = 50.0
 
-            # Accumulate height: pixel_vy < 0 means ball going up (gaining height)
-            # Damped accumulator with gravity decay
-            height_change = -pixel_vy / ppm  # convert pixel movement to meters
-            self._pixel_z_accumulator += height_change
+            # Height = how far the current pixel Y deviates from the line fit
+            # (parabola deviation from linear = the "airborne" component)
+            deviation = abs(current_y - np.polyval(line_coeffs, xs[-1]))
+            height = deviation / ppm
 
-            # Apply gravity-like decay — ball always tends toward ground
-            self._pixel_z_accumulator *= 0.95  # decay factor
-
-            # Clamp to reasonable range
-            z = max(0.0, min(self._pixel_z_accumulator, 5.0))
-            return round(z, 2)
+            return round(max(0.0, min(height, 5.0)), 2)
         except Exception:
             return 0.0
 
