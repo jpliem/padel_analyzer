@@ -5,6 +5,10 @@ import type {
 
 const API = 'http://localhost:8000';
 
+export async function autoDetectCourt(matchId: string): Promise<{ keypoints: number[][]; mode: string }> {
+  return fetchJSON(`${API}/match/${matchId}/auto-detect-court`, { method: 'POST' });
+}
+
 export function getAnnotatedVideoUrl(matchId: string): string {
   return `${API}/match/${matchId}/annotated`;
 }

@@ -407,6 +407,56 @@ def start_match_analysis(match_id: str, background_tasks: BackgroundTasks,
     return {"status": "started", "match_id": match_id}
 
 
+@app.post("/match/{match_id}/auto-detect-court")
+def auto_detect_court(match_id: str):
+    """Run court keypoint detection on first frame of uploaded video."""
+    _load_match(match_id)
+    video_path = os.path.join(_match_dir(match_id), "video.mp4")
+    if not os.path.exists(video_path):
+        raise HTTPException(status_code=400, detail="No video uploaded")
+
+    import cv2
+    from cv.court_detector import CourtDetector
+
+    cap = cv2.VideoCapture(video_path)
+    ret, frame = cap.read()
+    cap.release()
+    if not ret:
+        raise HTTPException(status_code=400, detail="Cannot read video frame")
+
+    detector = CourtDetector()
+    keypoints = detector.detect(frame)
+    if not keypoints:
+        raise HTTPException(status_code=400, detail="Could not detect court keypoints")
+
+    # Auto-calibrate with detected keypoints
+    import numpy as np
+    from cv.court_calibration import CourtCalibration
+    from cv.camera_model import CameraModel
+
+    cal = CourtCalibration()
+    cal.calibrate_keypoints(keypoints)
+
+    cam = CameraModel()
+    cam.calibrate(keypoints_2d=keypoints,
+                  image_width=frame.shape[1], image_height=frame.shape[0])
+
+    match_data = _load_match(match_id)
+    match_data["calibration"] = cal.to_dict()
+    match_data["camera_model"] = cam.to_dict()
+    match_data["calibration_points"] = {
+        "corners": keypoints,
+        "mode": "auto-detect",
+    }
+    _save_match(match_id, match_data)
+
+    return {
+        "status": "calibrated",
+        "mode": "auto-detect" + (" (3D)" if cam.has_3d() else ""),
+        "keypoints": keypoints,
+    }
+
+
 @app.get("/match/{match_id}/annotated")
 def get_annotated_video(match_id: str):
     _load_match(match_id)

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { calibrate, uploadVideo, listTemplates, getTemplate, saveTemplate, CalibrationTemplate } from '../api';
+import { calibrate, uploadVideo, listTemplates, getTemplate, saveTemplate, autoDetectCourt, CalibrationTemplate } from '../api';
 import CalibrationCanvas from '../components/CalibrationCanvas';
 import CourtMiniMap from '../components/CourtMiniMap';
 
@@ -55,24 +55,28 @@ const Calibration: React.FC = () => {
     }
   };
 
-  const handleSkipAutoDetect = async () => {
-    if (!id) return;
-    setSaving(true);
+  const [autoDetecting, setAutoDetecting] = useState(false);
+
+  const handleAutoDetect = async () => {
+    if (!id || !videoFile) return;
+    setAutoDetecting(true);
     setError(null);
     try {
-      if (videoFile) {
-        await uploadVideo(id, videoFile);
-      }
-      // Save a minimal calibration so the match shows as "calibrated"
-      // Auto-detection during analysis will override this
-      await calibrate(id, [
-        [0, 0], [1, 0], [1, 1], [0, 1],  // dummy corners
-      ]);
+      // Step 1: Upload video
+      await uploadVideo(id, videoFile);
+
+      // Step 2: Run auto-detection on first frame
+      const result = await autoDetectCourt(id);
+
+      // Step 3: Show detected keypoints on the canvas
+      setKeypoints(result.keypoints);
+
+      // Already calibrated by the backend
       setSaved(true);
     } catch (err: any) {
       setError(err.message);
     } finally {
-      setSaving(false);
+      setAutoDetecting(false);
     }
   };
 
@@ -156,10 +160,10 @@ const Calibration: React.FC = () => {
           <button
             className="btn btn-success"
             style={{ width: '100%', padding: 12, fontSize: 14 }}
-            onClick={handleSkipAutoDetect}
-            disabled={saving}
+            onClick={handleAutoDetect}
+            disabled={autoDetecting}
           >
-            {saving ? 'Setting up...' : 'Auto-Detect Court Lines (Recommended)'}
+            {autoDetecting ? 'Detecting court lines...' : 'Auto-Detect Court Lines (Recommended)'}
           </button>
         )}
         {!saved && videoFile && keypoints.length === 0 && (
