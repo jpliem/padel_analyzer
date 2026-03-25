@@ -196,6 +196,34 @@ class CameraModel:
 
         return bbox_height_px / px_per_m
 
+    # --- Adapter methods (CourtCalibration interface) ---
+
+    def pixel_to_court(self, px: float, py: float):
+        """Adapter: matches CourtCalibration.pixel_to_court signature."""
+        return self.project_to_ground(px, py)
+
+    def court_to_pixel_2d(self, cx: float, cy: float):
+        """Adapter: 2D court coords to pixel (ground plane)."""
+        return self.court_to_pixel(cx, cy, 0.0)
+
+    def is_in_bounds(self, x: float, y: float) -> bool:
+        return 0.0 <= x <= COURT_WIDTH and 0.0 <= y <= COURT_LENGTH
+
+    def get_court_side(self, x: float, y: float) -> str:
+        return "near" if y < NET_Y else "far"
+
+    def is_in_service_box(self, x: float, y: float, box: str) -> bool:
+        boxes = {
+            "near_left": (0, 5, 6.95, 10),
+            "near_right": (5, 10, 6.95, 10),
+            "far_left": (0, 5, 10, 13.05),
+            "far_right": (5, 10, 10, 13.05),
+        }
+        if box not in boxes:
+            return False
+        x1, x2, y1, y2 = boxes[box]
+        return x1 <= x <= x2 and y1 <= y <= y2
+
     def has_3d(self) -> bool:
         """Whether full 3D camera model is available (vs fallback homography)."""
         return self.rvec is not None
