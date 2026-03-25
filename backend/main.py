@@ -232,7 +232,8 @@ _analysis_jobs: Dict[str, Dict] = {}
 
 
 @app.post("/analyze/upload")
-async def upload_video(match_id: str, file: UploadFile = File(...)):
+async def upload_video(match_id: str, file: UploadFile = File(...),
+                       detector_type: str = "yolo"):
     _load_match(match_id)
     match_dir = _match_dir(match_id)
     os.makedirs(match_dir, exist_ok=True)
@@ -240,7 +241,10 @@ async def upload_video(match_id: str, file: UploadFile = File(...)):
     with open(video_path, "wb") as f:
         shutil.copyfileobj(file.file, f)
     job_id = match_id
-    _analysis_jobs[job_id] = {"state": "uploaded", "percent": 0, "match_id": match_id}
+    _analysis_jobs[job_id] = {
+        "state": "uploaded", "percent": 0,
+        "match_id": match_id, "detector_type": detector_type,
+    }
     return {"job_id": job_id, "status": "uploaded"}
 
 
@@ -262,7 +266,9 @@ def start_analysis(job_id: str, background_tasks: BackgroundTasks):
         cal = CourtCalibration.from_dict(match_data["calibration"])
 
     config = EventDetectorConfig()
-    analyzer = VideoAnalyzer(match_id=match_id, calibration=cal, config=config)
+    detector_type = job.get("detector_type", "yolo")
+    analyzer = VideoAnalyzer(match_id=match_id, calibration=cal, config=config,
+                             detector_type=detector_type)
     _active_analyzers[match_id] = analyzer
 
     video_path = os.path.join(_match_dir(match_id), "video.mp4")
