@@ -99,7 +99,7 @@ class VideoAnalyzer:
 
         writer = None
         if annotated_path:
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            fourcc = cv2.VideoWriter_fourcc(*'avc1')
             writer = cv2.VideoWriter(annotated_path, fourcc, fps, (w, h))
 
         frame_no = 0
