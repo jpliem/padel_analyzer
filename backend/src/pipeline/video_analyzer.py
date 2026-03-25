@@ -85,10 +85,12 @@ class VideoAnalyzer:
         ball_pos = self.ball_tracker.update(ball_bbox, frame_no)
         player_pos = self.player_tracker.update(player_detections, frame_no)
 
-        # Re-assign players every 30 frames to handle track ID changes
-        if frame_no >= self._config.auto_assign_after_frames and frame_no % 30 == 0:
+        # Initial assignment once, then only assign new unmatched tracks
+        if not self._auto_assigned and frame_no >= self._config.auto_assign_after_frames:
             self._auto_assign_players(player_pos)
             self._auto_assigned = True
+        elif self._auto_assigned:
+            self._assign_new_tracks(player_pos)
 
         events = self.event_detector.process(ball_pos, player_pos, frame_no)
         self.all_events.extend(events)
@@ -236,5 +238,52 @@ class VideoAnalyzer:
             pid = f"P{i + 3}"
             assignments.append((p["track_id"], pid))
 
+        self._last_known_positions = {}
         for track_id, player_id in assignments:
             self.player_tracker.assign_player(track_id, player_id)
+            # Store last known position for each player ID
+            pos = next((p for p in current_positions if p["track_id"] == track_id), None)
+            if pos:
+                self._last_known_positions[player_id] = (pos["x"], pos["y"])
+
+    def _assign_new_tracks(self, current_positions: List[Dict]):
+        """Assign player IDs to new track IDs by proximity to last known position."""
+        if not hasattr(self, '_last_known_positions'):
+            return
+
+        for p in current_positions:
+            tid = p["track_id"]
+            existing = self.player_tracker.get_player_id(tid)
+            if existing:
+                # Track already has a player ID — update last known position
+                self._last_known_positions[existing] = (p["x"], p["y"])
+                continue
+
+            # New unassigned track — find the closest unassigned player ID
+            assigned_pids = set()
+            for pp in current_positions:
+                pid = self.player_tracker.get_player_id(pp["track_id"])
+                if pid:
+                    assigned_pids.add(pid)
+
+            # Find unassigned player IDs
+            all_pids = {"P1", "P2", "P3", "P4"}
+            unassigned = all_pids - assigned_pids
+
+            if not unassigned:
+                continue
+
+            # Match to closest last known position
+            best_pid = None
+            best_dist = float("inf")
+            for pid in unassigned:
+                if pid in self._last_known_positions:
+                    lx, ly = self._last_known_positions[pid]
+                    dist = ((p["x"] - lx) ** 2 + (p["y"] - ly) ** 2) ** 0.5
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_pid = pid
+
+            if best_pid and best_dist < 5.0:  # max 5 meters to match
+                self.player_tracker.assign_player(tid, best_pid)
+                self._last_known_positions[best_pid] = (p["x"], p["y"])
