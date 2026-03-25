@@ -7,77 +7,114 @@ from cv.detectors.base import BallDetector
 from cv.detectors.device import get_device
 
 
+class Conv(nn.Module):
+    """Conv + ReLU + BatchNorm block.
+
+    The bc (batch-norm channels) parameter exists because the pretrained weights
+    were converted from TensorFlow where BatchNorm runs on the last axis (W dimension
+    after NCHW→NWHC transpose), not the channel dimension.
+    """
+    def __init__(self, ic, oc, bc, k=(3, 3), p="same", act=True):
+        super().__init__()
+        self.conv = nn.Conv2d(ic, oc, kernel_size=k, padding=p)
+        self.bn = nn.BatchNorm2d(bc)
+        self.act = nn.ReLU() if act else nn.Identity()
+
+    def forward(self, x):
+        x = self.act(self.conv(x))
+        x = x.transpose(1, 3)    # NCHW → NWHC
+        x = self.bn(x)
+        x = x.transpose(1, 3)    # NWHC → NCHW
+        return x
+
+
 class TrackNetV2Model(nn.Module):
-    """TrackNetV2: U-Net encoder-decoder for ball detection from 3 consecutive frames."""
+    """TrackNetV2: VGG16-based U-Net with concatenation skip connections.
+
+    Architecture matches ChgygLin/TrackNetV2-pytorch tf2torch weights.
+    Input: (B, 9, H, W) — 3 consecutive RGB frames concatenated.
+    Output: (B, 3, H, W) — 3 heatmaps (one per input frame).
+    """
 
     def __init__(self):
         super().__init__()
-        # Encoder
-        self.enc1 = self._conv_block(9, 64, 2)
-        self.enc2 = self._conv_block(64, 128, 2)
-        self.enc3 = self._conv_block(128, 256, 3)
-        self.enc4 = self._conv_block(256, 512, 3)
-        self.pool = nn.MaxPool2d(2, 2)
+        # Encoder (VGG16-like) — bc values match pretrained weight dimensions
+        self.conv2d_1 = Conv(9, 64, 512)
+        self.conv2d_2 = Conv(64, 64, 512)
+        self.max_pooling_1 = nn.MaxPool2d((2, 2), stride=(2, 2))
 
-        # Decoder
-        self.up4 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False)
-        self.dec4 = self._conv_block(512, 256, 3)
-        self.up3 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False)
-        self.dec3 = self._conv_block(256, 128, 2)
-        self.up2 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False)
-        self.dec2 = self._conv_block(128, 64, 2)
-        self.up1 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False)
-        self.dec1 = nn.Sequential(
-            nn.Conv2d(64, 64, 3, padding=1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(64, 1, 1),
-            nn.Sigmoid(),
-        )
+        self.conv2d_3 = Conv(64, 128, 256)
+        self.conv2d_4 = Conv(128, 128, 256)
+        self.max_pooling_2 = nn.MaxPool2d((2, 2), stride=(2, 2))
 
-    def _conv_block(self, in_ch: int, out_ch: int, n_convs: int) -> nn.Sequential:
-        layers = []
-        for i in range(n_convs):
-            layers.append(nn.Conv2d(in_ch if i == 0 else out_ch, out_ch, 3, padding=1))
-            layers.append(nn.BatchNorm2d(out_ch))
-            layers.append(nn.ReLU(inplace=True))
-        return nn.Sequential(*layers)
+        self.conv2d_5 = Conv(128, 256, 128)
+        self.conv2d_6 = Conv(256, 256, 128)
+        self.conv2d_7 = Conv(256, 256, 128)
+        self.max_pooling_3 = nn.MaxPool2d((2, 2), stride=(2, 2))
+
+        self.conv2d_8 = Conv(256, 512, 64)
+        self.conv2d_9 = Conv(512, 512, 64)
+        self.conv2d_10 = Conv(512, 512, 64)
+
+        # Decoder with concatenation skip connections
+        self.up_sampling_1 = nn.UpsamplingNearest2d(scale_factor=2)
+        self.conv2d_11 = Conv(768, 256, 128)
+        self.conv2d_12 = Conv(256, 256, 128)
+        self.conv2d_13 = Conv(256, 256, 128)
+
+        self.up_sampling_2 = nn.UpsamplingNearest2d(scale_factor=2)
+        self.conv2d_14 = Conv(384, 128, 256)
+        self.conv2d_15 = Conv(128, 128, 256)
+
+        self.up_sampling_3 = nn.UpsamplingNearest2d(scale_factor=2)
+        self.conv2d_16 = Conv(192, 64, 512)
+        self.conv2d_17 = Conv(64, 64, 512)
+        self.conv2d_18 = nn.Conv2d(64, 3, kernel_size=(1, 1), padding='same')
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # Encoder
-        e1 = self.enc1(x)
-        e2 = self.enc2(self.pool(e1))
-        e3 = self.enc3(self.pool(e2))
-        e4 = self.enc4(self.pool(e3))
+        x = self.conv2d_1(x)
+        x1 = self.conv2d_2(x)
+        x = self.max_pooling_1(x1)
 
-        # Decoder with skip connections (additive)
-        d4 = self.dec4(self.up4(e4))
-        # Handle size mismatch from odd dimensions
-        if d4.shape != e3.shape:
-            d4 = nn.functional.interpolate(d4, size=e3.shape[2:])
-        d4 = d4 + e3
+        x = self.conv2d_3(x)
+        x2 = self.conv2d_4(x)
+        x = self.max_pooling_2(x2)
 
-        d3 = self.dec3(self.up3(d4))
-        if d3.shape != e2.shape:
-            d3 = nn.functional.interpolate(d3, size=e2.shape[2:])
-        d3 = d3 + e2
+        x = self.conv2d_5(x)
+        x = self.conv2d_6(x)
+        x3 = self.conv2d_7(x)
+        x = self.max_pooling_3(x3)
 
-        d2 = self.dec2(self.up2(d3))
-        if d2.shape != e1.shape:
-            d2 = nn.functional.interpolate(d2, size=e1.shape[2:])
-        d2 = d2 + e1
+        x = self.conv2d_8(x)
+        x = self.conv2d_9(x)
+        x = self.conv2d_10(x)
 
-        out = self.dec1(self.up1(d2))
-        # Ensure output matches expected size
-        if out.shape[2:] != (360, 640):
-            out = nn.functional.interpolate(out, size=(360, 640))
-        return out
+        # Decoder
+        x = self.up_sampling_1(x)
+        x = torch.cat([x, x3], dim=1)
+        x = self.conv2d_11(x)
+        x = self.conv2d_12(x)
+        x = self.conv2d_13(x)
+
+        x = self.up_sampling_2(x)
+        x = torch.cat([x, x2], dim=1)
+        x = self.conv2d_14(x)
+        x = self.conv2d_15(x)
+
+        x = self.up_sampling_3(x)
+        x = torch.cat([x, x1], dim=1)
+        x = self.conv2d_16(x)
+        x = self.conv2d_17(x)
+        x = self.conv2d_18(x)
+
+        return torch.sigmoid(x)
 
 
 class TrackNetBallDetector(BallDetector):
     """Ball detector using TrackNetV2 with 3-frame temporal input and optional YOLO fallback."""
 
-    HEATMAP_W, HEATMAP_H = 640, 360
+    HEATMAP_W, HEATMAP_H = 512, 288
 
     def __init__(self, model: TrackNetV2Model = None, model_path: str = None,
                  conf_threshold: float = 0.5, yolo_fallback=None):
@@ -89,7 +126,7 @@ class TrackNetBallDetector(BallDetector):
         elif model_path is not None:
             self._model = TrackNetV2Model()
             self._model.load_state_dict(
-                torch.load(model_path, map_location=self._torch_device, weights_only=True))
+                torch.load(model_path, map_location=self._torch_device, weights_only=False))
         else:
             raise ValueError("Either model or model_path must be provided")
 
@@ -139,19 +176,18 @@ class TrackNetBallDetector(BallDetector):
             r = r.astype(np.float32) / 255.0
             resized.append(r)
 
-        # Stack 3 frames into 9-channel input: [H, W, 9]
-        stacked = np.concatenate(resized, axis=2)  # (360, 640, 9)
-        tensor = torch.from_numpy(stacked).permute(2, 0, 1).unsqueeze(0)  # (1, 9, 360, 640)
+        stacked = np.concatenate(resized, axis=2)  # (H, W, 9)
+        tensor = torch.from_numpy(stacked).permute(2, 0, 1).unsqueeze(0)  # (1, 9, H, W)
         tensor = tensor.to(self._torch_device)
 
         with torch.no_grad():
             output = self._model(tensor)
 
-        return output[0, 0].cpu().numpy()  # (360, 640) heatmap
+        # Output is (1, 3, H, W) — use last channel (heatmap for most recent frame)
+        return output[0, 2].cpu().numpy()
 
     @staticmethod
     def _find_peak(heatmap: np.ndarray):
-        # Gaussian blur to smooth noise
         smoothed = cv2.GaussianBlur(heatmap, (5, 5), 2.0)
         peak_idx = smoothed.argmax()
         peak_y, peak_x = np.unravel_index(peak_idx, smoothed.shape)

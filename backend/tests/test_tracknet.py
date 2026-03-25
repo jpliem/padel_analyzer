@@ -10,16 +10,16 @@ class TestTrackNetV2Model:
         model = TrackNetV2Model()
         model.eval()
         # Input: batch=1, 9 channels (3 frames × 3 RGB), 360×640
-        x = torch.randn(1, 9, 360, 640)
+        x = torch.randn(1, 9, 288, 512)
         with torch.no_grad():
             out = model(x)
-        assert out.shape == (1, 1, 360, 640)
+        assert out.shape == (1, 3, 288, 512)  # 3 heatmaps (one per input frame)
 
     def test_output_range_0_to_1(self):
         from cv.detectors.tracknet import TrackNetV2Model
         model = TrackNetV2Model()
         model.eval()
-        x = torch.randn(1, 9, 360, 640)
+        x = torch.randn(1, 9, 288, 512)
         with torch.no_grad():
             out = model(x)
         assert out.min() >= 0.0
@@ -29,10 +29,10 @@ class TestTrackNetV2Model:
         from cv.detectors.tracknet import TrackNetV2Model
         model = TrackNetV2Model()
         model.eval()
-        x = torch.randn(2, 9, 360, 640)
+        x = torch.randn(2, 9, 288, 512)
         with torch.no_grad():
             out = model(x)
-        assert out.shape == (2, 1, 360, 640)
+        assert out.shape == (2, 3, 288, 512)
 
 
 class TestTrackNetBallDetector:
@@ -42,8 +42,8 @@ class TestTrackNetBallDetector:
 
         # Create a mock model that returns a heatmap with a peak at the specified location
         mock_model = MagicMock(spec=TrackNetV2Model)
-        heatmap = torch.zeros(1, 1, 360, 640)
-        heatmap[0, 0, peak_y, peak_x] = peak_conf
+        heatmap = torch.zeros(1, 3, 288, 512)
+        heatmap[0, 2, peak_y, peak_x] = peak_conf  # channel 2 = most recent frame
         mock_model.return_value = heatmap
         mock_model.eval = MagicMock()
         mock_model.to = MagicMock(return_value=mock_model)
@@ -64,16 +64,16 @@ class TestTrackNetBallDetector:
         assert detector.detect(frame, 1) is None
 
     def test_returns_bbox_on_third_frame(self):
-        detector = self._make_detector_with_mock_model(peak_conf=0.9, peak_x=320, peak_y=180)
+        detector = self._make_detector_with_mock_model(peak_conf=0.9, peak_x=256, peak_y=144)
         frame = np.zeros((720, 1280, 3), dtype=np.uint8)
         detector.detect(frame, 0)
         detector.detect(frame, 1)
         result = detector.detect(frame, 2)
         assert result is not None
         assert len(result) == 4
-        # Peak at heatmap (320, 180) scaled to frame (1280, 720):
-        # scale_x = 1280/640 = 2, scale_y = 720/360 = 2
-        # cx = 320*2 = 640, cy = 180*2 = 360
+        # Peak at heatmap (256, 144) scaled to frame (1280, 720):
+        # scale_x = 1280/512 = 2.5, scale_y = 720/288 = 2.5
+        # cx = 256*2.5 = 640, cy = 144*2.5 = 360
         expected_cx, expected_cy = 640, 360
         assert abs(result[0] - (expected_cx - 10)) < 2
         assert abs(result[1] - (expected_cy - 10)) < 2
