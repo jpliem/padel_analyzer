@@ -5,6 +5,7 @@ import { startMatchAnalysis, getAnalysisStatus, getScore, getEvents, getTrajecto
 import Scoreboard from '../components/Scoreboard';
 import EventLog from '../components/EventLog';
 import CourtMiniMap from '../components/CourtMiniMap';
+import Court3DView from '../components/Court3DView';
 import type { ScoreData, EventData, TrajectoryPoint } from '../types';
 
 interface FramePositions {
@@ -24,6 +25,7 @@ const OfflineAnalysis: React.FC = () => {
   const [positions, setPositions] = useState<FramePositions[]>([]);
   const [currentFrame, setCurrentFrame] = useState(0);
   const [fps] = useState(24);
+  const [view3D, setView3D] = useState(false);
   const animRef = useRef<number>();
   const pollRef = useRef<ReturnType<typeof setInterval>>();
 
@@ -248,11 +250,34 @@ const OfflineAnalysis: React.FC = () => {
             <Separator style={{ height: 4, background: '#e0e0e0', cursor: 'row-resize' }} />
             <Panel defaultSize={55} minSize={25}>
               <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-                <CourtMiniMap
-                  players={playerDots}
-                  ballPosition={currentBall ? { x: currentBall.x, y: currentBall.y } : null}
-                  ballTrail={ballTrail}
-                />
+                {/* 2D/3D toggle */}
+                <div style={{ display: 'flex', padding: '4px 8px', background: '#1a2332', borderBottom: '1px solid #2a3342', gap: 4 }}>
+                  <button onClick={() => setView3D(false)} style={{
+                    flex: 1, padding: '4px 8px', fontSize: 11, border: 'none', borderRadius: 4, cursor: 'pointer',
+                    background: !view3D ? '#00b894' : '#2a3342', color: !view3D ? 'white' : '#6b7b8d',
+                  }}>2D Top-Down</button>
+                  <button onClick={() => setView3D(true)} style={{
+                    flex: 1, padding: '4px 8px', fontSize: 11, border: 'none', borderRadius: 4, cursor: 'pointer',
+                    background: view3D ? '#6c5ce7' : '#2a3342', color: view3D ? 'white' : '#6b7b8d',
+                  }}>3D Court</button>
+                </div>
+                {view3D ? (
+                  <Court3DView
+                    players={playerDots}
+                    ballPosition={currentBall ? { x: currentBall.x, y: currentBall.y, z: currentBall.z } : null}
+                    ballTrail={ballTrail.map((p, i) => {
+                      // Find matching trajectory point to get Z
+                      const tp = trajectory.find(t => Math.abs(t.x - p.x) < 0.1 && Math.abs(t.y - p.y) < 0.1);
+                      return { x: p.x, y: p.y, z: tp?.z || 0 };
+                    })}
+                  />
+                ) : (
+                  <CourtMiniMap
+                    players={playerDots}
+                    ballPosition={currentBall ? { x: currentBall.x, y: currentBall.y } : null}
+                    ballTrail={ballTrail}
+                  />
+                )}
                 {status === 'complete' && (
                   <div style={{ padding: '6px 12px', background: '#1a2332', borderTop: '1px solid #2a3342', fontSize: 11, color: '#6b7b8d', flexShrink: 0 }}>
                     Frame {currentFrame} | Ball: {trajectory.length} pts | Events: {events.length}
