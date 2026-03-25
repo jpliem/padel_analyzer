@@ -7,104 +7,88 @@ from cv.detectors.base import BallDetector
 from cv.detectors.device import get_device
 
 
-# ── Tennis TrackNet (yastrebksv/TrackNet) ─────────────────────────────
+# ── TrackNet architecture (from padel_analytics) ─────────────────────
 
 
-class ConvBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size=3, pad=1, stride=1, bias=True):
+class Conv2DBlock(nn.Module):
+    def __init__(self, in_dim, out_dim):
         super().__init__()
-        self.block = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, kernel_size, stride=stride, padding=pad, bias=bias),
-            nn.ReLU(),
-            nn.BatchNorm2d(out_channels),
-        )
+        self.conv = nn.Conv2d(in_dim, out_dim, kernel_size=3, padding='same', bias=False)
+        self.bn = nn.BatchNorm2d(out_dim)
+        self.relu = nn.ReLU()
 
     def forward(self, x):
-        return self.block(x)
+        return self.relu(self.bn(self.conv(x)))
+
+
+class Double2DConv(nn.Module):
+    def __init__(self, in_dim, out_dim):
+        super().__init__()
+        self.conv_1 = Conv2DBlock(in_dim, out_dim)
+        self.conv_2 = Conv2DBlock(out_dim, out_dim)
+
+    def forward(self, x):
+        return self.conv_2(self.conv_1(x))
+
+
+class Triple2DConv(nn.Module):
+    def __init__(self, in_dim, out_dim):
+        super().__init__()
+        self.conv_1 = Conv2DBlock(in_dim, out_dim)
+        self.conv_2 = Conv2DBlock(out_dim, out_dim)
+        self.conv_3 = Conv2DBlock(out_dim, out_dim)
+
+    def forward(self, x):
+        return self.conv_3(self.conv_2(self.conv_1(x)))
 
 
 class TrackNetV2Model(nn.Module):
-    """TrackNet for tennis/padel ball detection.
+    """TrackNet from padel_analytics — trained on actual padel footage.
 
-    Architecture from yastrebksv/TrackNet, trained on tennis ball data.
-    Input: (B, 9, 360, 640) — 3 consecutive RGB frames.
-    Output: (B, 256, 230400) — per-pixel softmax over 256 heatmap bins.
+    Input: (B, in_dim, 288, 512) — seq_len frames × 3 RGB concatenated.
+    Output: (B, out_dim, 288, 512) — heatmap per frame in sequence.
     """
 
-    def __init__(self, out_channels=256):
+    def __init__(self, in_dim=27, out_dim=8):
         super().__init__()
-        self.out_channels = out_channels
+        self.in_dim = in_dim
+        self.out_dim = out_dim
+        self.down_block_1 = Double2DConv(in_dim, 64)
+        self.down_block_2 = Double2DConv(64, 128)
+        self.down_block_3 = Triple2DConv(128, 256)
+        self.bottleneck = Triple2DConv(256, 512)
+        self.up_block_1 = Triple2DConv(768, 256)  # 512 + 256 skip
+        self.up_block_2 = Double2DConv(384, 128)   # 256 + 128 skip
+        self.up_block_3 = Double2DConv(192, 64)    # 128 + 64 skip
+        self.predictor = nn.Conv2d(64, out_dim, (1, 1))
+        self.sigmoid = nn.Sigmoid()
+        self.pool = nn.MaxPool2d((2, 2), stride=(2, 2))
 
-        # Encoder
-        self.conv1 = ConvBlock(9, 64)
-        self.conv2 = ConvBlock(64, 64)
-        self.pool1 = nn.MaxPool2d(2, 2)
-        self.conv3 = ConvBlock(64, 128)
-        self.conv4 = ConvBlock(128, 128)
-        self.pool2 = nn.MaxPool2d(2, 2)
-        self.conv5 = ConvBlock(128, 256)
-        self.conv6 = ConvBlock(256, 256)
-        self.conv7 = ConvBlock(256, 256)
-        self.pool3 = nn.MaxPool2d(2, 2)
-        self.conv8 = ConvBlock(256, 512)
-        self.conv9 = ConvBlock(512, 512)
-        self.conv10 = ConvBlock(512, 512)
-
-        # Decoder
-        self.ups1 = nn.Upsample(scale_factor=2)
-        self.conv11 = ConvBlock(512, 256)
-        self.conv12 = ConvBlock(256, 256)
-        self.conv13 = ConvBlock(256, 256)
-        self.ups2 = nn.Upsample(scale_factor=2)
-        self.conv14 = ConvBlock(256, 128)
-        self.conv15 = ConvBlock(128, 128)
-        self.ups3 = nn.Upsample(scale_factor=2)
-        self.conv16 = ConvBlock(128, 64)
-        self.conv17 = ConvBlock(64, 64)
-        self.conv18 = ConvBlock(64, out_channels)
-
-        self.softmax = nn.Softmax(dim=1)
-
-    def forward(self, x: torch.Tensor, testing: bool = True) -> torch.Tensor:
-        batch_size = x.size(0)
-        x = self.conv1(x)
-        x = self.conv2(x)
-        x = self.pool1(x)
-        x = self.conv3(x)
-        x = self.conv4(x)
-        x = self.pool2(x)
-        x = self.conv5(x)
-        x = self.conv6(x)
-        x = self.conv7(x)
-        x = self.pool3(x)
-        x = self.conv8(x)
-        x = self.conv9(x)
-        x = self.conv10(x)
-        x = self.ups1(x)
-        x = self.conv11(x)
-        x = self.conv12(x)
-        x = self.conv13(x)
-        x = self.ups2(x)
-        x = self.conv14(x)
-        x = self.conv15(x)
-        x = self.ups3(x)
-        x = self.conv16(x)
-        x = self.conv17(x)
-        x = self.conv18(x)
-        out = x.reshape(batch_size, self.out_channels, -1)
-        if testing:
-            out = self.softmax(out)
-        return out
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x1 = self.down_block_1(x)
+        x = self.pool(x1)
+        x2 = self.down_block_2(x)
+        x = self.pool(x2)
+        x3 = self.down_block_3(x)
+        x = self.pool(x3)
+        x = self.bottleneck(x)
+        x = torch.cat([nn.Upsample(scale_factor=2)(x), x3], dim=1)
+        x = self.up_block_1(x)
+        x = torch.cat([nn.Upsample(scale_factor=2)(x), x2], dim=1)
+        x = self.up_block_2(x)
+        x = torch.cat([nn.Upsample(scale_factor=2)(x), x1], dim=1)
+        x = self.up_block_3(x)
+        x = self.predictor(x)
+        x = self.sigmoid(x)
+        return x
 
 
 class TrackNetBallDetector(BallDetector):
-    """Ball detector using TrackNet with 3-frame temporal input and optional YOLO fallback.
+    """Ball detector using padel-trained TrackNet with 9-frame temporal input."""
 
-    Uses tennis-trained weights. Output is 256-class per-pixel softmax.
-    Peak of the "ball present" probability map gives ball center.
-    """
-
-    HEATMAP_W, HEATMAP_H = 640, 360
+    HEATMAP_W, HEATMAP_H = 512, 288
+    SEQ_LEN = 8  # uses 9 frames (seq_len + 1 with bg_mode=concat)
+    N_INPUT_FRAMES = 9
 
     def __init__(self, model: TrackNetV2Model = None, model_path: str = None,
                  conf_threshold: float = 0.5, yolo_fallback=None):
@@ -114,9 +98,12 @@ class TrackNetBallDetector(BallDetector):
         if model is not None:
             self._model = model
         elif model_path is not None:
-            self._model = TrackNetV2Model(out_channels=256)
-            self._model.load_state_dict(
-                torch.load(model_path, map_location=self._torch_device, weights_only=False))
+            self._model = TrackNetV2Model(in_dim=27, out_dim=8)
+            checkpoint = torch.load(model_path, map_location=self._torch_device, weights_only=False)
+            if isinstance(checkpoint, dict) and 'model' in checkpoint:
+                self._model.load_state_dict(checkpoint['model'])
+            else:
+                self._model.load_state_dict(checkpoint)
         else:
             raise ValueError("Either model or model_path must be provided")
 
@@ -128,9 +115,9 @@ class TrackNetBallDetector(BallDetector):
 
     def detect(self, frame: np.ndarray, frame_id: int = 0) -> Optional[List[float]]:
         self._buffer.append(frame)
-        if len(self._buffer) > 3:
+        if len(self._buffer) > self.N_INPUT_FRAMES:
             self._buffer.pop(0)
-        if len(self._buffer) < 3:
+        if len(self._buffer) < self.N_INPUT_FRAMES:
             if self._yolo_fallback:
                 return self._yolo_fallback.detect(frame, frame_id)
             return None
@@ -152,8 +139,8 @@ class TrackNetBallDetector(BallDetector):
         return None
 
     def warm_up(self) -> None:
-        dummy_frames = [np.zeros((self.HEATMAP_H, self.HEATMAP_W, 3), dtype=np.uint8)] * 3
-        self._infer(dummy_frames)
+        dummy = [np.zeros((self.HEATMAP_H, self.HEATMAP_W, 3), dtype=np.uint8)] * self.N_INPUT_FRAMES
+        self._infer(dummy)
 
     @property
     def device(self) -> str:
@@ -166,28 +153,16 @@ class TrackNetBallDetector(BallDetector):
             r = r.astype(np.float32) / 255.0
             resized.append(r)
 
-        # Stack 3 frames → 9 channels
-        stacked = np.concatenate(resized, axis=2)  # (360, 640, 9)
-        tensor = torch.from_numpy(stacked).permute(2, 0, 1).unsqueeze(0)  # (1, 9, 360, 640)
+        # Stack 9 frames → 27 channels
+        stacked = np.concatenate(resized, axis=2)  # (288, 512, 27)
+        tensor = torch.from_numpy(stacked).permute(2, 0, 1).unsqueeze(0)  # (1, 27, 288, 512)
         tensor = tensor.to(self._torch_device)
 
         with torch.no_grad():
-            output = self._model(tensor, testing=True)  # (1, 256, 230400)
+            output = self._model(tensor)  # (1, 8, 288, 512)
 
-        # Reshape to (256, 360, 640), take argmax per pixel → class index
-        # Then get the "ball present" probability
-        out = output[0]  # (256, 230400)
-        out = out.reshape(self._model.out_channels, self.HEATMAP_H, self.HEATMAP_W)
-
-        # Each pixel has 256 classes — higher class index = higher ball probability
-        # The heatmap is the probability of the ball being present (sum of high classes)
-        # or more simply: weighted sum where higher class = more likely ball
-        # Take argmax per pixel — if class > threshold, ball is there
-        class_map = out.argmax(dim=0).cpu().numpy().astype(np.float32)  # (360, 640)
-
-        # Normalize to 0-1 range
-        heatmap = class_map / 255.0
-        return heatmap
+        # Use last channel (most recent frame's heatmap)
+        return output[0, -1].cpu().numpy()  # (288, 512)
 
     @staticmethod
     def _find_peak(heatmap: np.ndarray):
