@@ -14,6 +14,8 @@ from cv.court_detector import CourtDetector
 from cv.court_calibration import CourtCalibration
 from logic.event_detector import EventDetector
 from logic.scoring_engine import PadelScoringEngine
+from models.court_model import PadelCourtModel
+from pipeline.world_fusion import WorldFusion
 
 
 @dataclass
@@ -72,9 +74,14 @@ class VideoAnalyzer:
         if not team_map:
             team_map = {"P1": 1, "P2": 1, "P3": 2, "P4": 2}
 
+        # Court model and world fusion for multi-camera support
+        self._court_model = PadelCourtModel()
+        self._world_fusion = WorldFusion(self._court_model)
+
         self.event_detector = EventDetector(
             config, calibration, self.scoring_engine,
-            self.player_tracker, team_map
+            self.player_tracker, team_map,
+            court_model=self._court_model,
         )
 
         self._config = config

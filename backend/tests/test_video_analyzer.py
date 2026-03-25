@@ -67,6 +67,27 @@ class TestVideoAnalyzer:
             va.process_frame(frame, 2)
             assert va._auto_assigned
 
+    def test_video_analyzer_single_camera_compat(self, mock_deps):
+        """VideoAnalyzer with one camera should have internal WorldFusion."""
+        from pipeline.video_analyzer import VideoAnalyzer
+
+        calibration, config = mock_deps
+        calibration.project_to_ground.return_value = (5.0, 10.0)
+        calibration.has_3d.return_value = False
+        calibration.court_to_pixel.return_value = (500, 350)
+        calibration.court_to_pixel_2d.return_value = (500, 350)
+        calibration.get_court_side.return_value = "near"
+
+        with patch('pipeline.video_analyzer.UnifiedYoloDetector'):
+            analyzer = VideoAnalyzer(
+                match_id="test",
+                calibration=calibration,
+                config=config,
+                detector_type="yolo",
+            )
+            assert analyzer._world_fusion is not None
+            assert analyzer._court_model is not None
+
     def test_detector_type_tracknet(self, mock_deps):
         from pipeline.video_analyzer import VideoAnalyzer
         calibration, config = mock_deps
