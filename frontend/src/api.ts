@@ -112,6 +112,10 @@ export async function deleteAnalysis(matchId: string): Promise<void> {
   await fetchJSON(`${API}/match/${matchId}/analysis`, { method: 'DELETE' });
 }
 
+export async function deleteMatch(matchId: string): Promise<void> {
+  await fetchJSON(`${API}/match/${matchId}`, { method: 'DELETE' });
+}
+
 // Templates
 export interface CalibrationTemplate {
   id: string;

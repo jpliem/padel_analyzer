@@ -185,6 +185,17 @@ def delete_analysis(match_id: str):
     return {"status": "deleted", "match_id": match_id}
 
 
+@app.delete("/match/{match_id}")
+def delete_match(match_id: str):
+    """Delete entire match and all its data."""
+    match_dir = _match_dir(match_id)
+    if os.path.exists(match_dir):
+        shutil.rmtree(match_dir)
+    _active_analyzers.pop(match_id, None)
+    _analysis_jobs.pop(match_id, None)
+    return {"status": "deleted", "match_id": match_id}
+
+
 # ── Calibration Templates ──────────────────────────────────────────────
 
 TEMPLATES_DIR = "data/templates"

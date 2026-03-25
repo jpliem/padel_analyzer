@@ -37,7 +37,10 @@ const Dashboard: React.FC = () => {
         <p style={{ color: '#888' }}>Loading matches...</p>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 16 }}>
-          {matches.map(m => <MatchCard key={m.match_id} match={m} />)}
+          {matches.map(m => (
+            <MatchCard key={m.match_id} match={m}
+              onDeleted={() => setMatches(prev => prev.filter(x => x.match_id !== m.match_id))} />
+          ))}
           <div onClick={() => navigate('/match/new')}
             style={{
               background: 'white', border: '2px dashed #d0d0d0', borderRadius: 10,

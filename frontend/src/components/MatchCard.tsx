@@ -1,9 +1,11 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
+import { deleteMatch } from '../api';
 import type { MatchSummary } from '../types';
 
 interface Props {
   match: MatchSummary;
+  onDeleted?: () => void;
 }
 
 const statusBadge: Record<string, string> = {
@@ -13,7 +15,7 @@ const statusBadge: Record<string, string> = {
   live: 'badge-live',
 };
 
-const MatchCard: React.FC<Props> = ({ match }) => {
+const MatchCard: React.FC<Props> = ({ match, onDeleted }) => {
   const navigate = useNavigate();
 
   const handleClick = () => {
@@ -26,17 +28,44 @@ const MatchCard: React.FC<Props> = ({ match }) => {
     }
   };
 
+  const handleDelete = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!window.confirm(`Delete match "${match.match_name}" (${match.match_id})?`)) return;
+    try {
+      await deleteMatch(match.match_id);
+      onDeleted?.();
+    } catch (err) {
+      alert('Failed to delete match');
+    }
+  };
+
   return (
     <div
       onClick={handleClick}
       style={{
         background: 'white', border: '1px solid #e8e8e8', borderRadius: 10,
-        padding: 20, cursor: 'pointer', transition: 'box-shadow 0.2s',
+        padding: 20, cursor: 'pointer', transition: 'box-shadow 0.2s', position: 'relative',
       }}
       onMouseOver={e => (e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.08)')}
       onMouseOut={e => (e.currentTarget.style.boxShadow = 'none')}
     >
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
+      {/* Delete button */}
+      <button
+        onClick={handleDelete}
+        style={{
+          position: 'absolute', top: 8, right: 8,
+          background: 'none', border: 'none', cursor: 'pointer',
+          color: '#ccc', fontSize: 16, padding: '2px 6px', borderRadius: 4,
+          transition: 'color 0.2s',
+        }}
+        onMouseOver={e => (e.currentTarget.style.color = '#e17055')}
+        onMouseOut={e => (e.currentTarget.style.color = '#ccc')}
+        title="Delete match"
+      >
+        ×
+      </button>
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', paddingRight: 20 }}>
         <div>
           <div style={{ fontSize: 16, fontWeight: 600 }}>{match.match_name}</div>
           <div style={{ fontSize: 12, color: '#888', marginTop: 4 }}>{match.match_id}</div>
