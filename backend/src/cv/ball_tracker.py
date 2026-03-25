@@ -38,8 +38,12 @@ class BallTracker:
             cy = (bbox[1] + bbox[3]) / 2.0
             bbox_size = max(bbox[2] - bbox[0], bbox[3] - bbox[1])
 
-            # Estimate ball height using camera model (preferred) or bbox size (fallback)
-            z = self._estimate_z_from_camera(cx, cy) if hasattr(self.calibration, 'project_to_ground') and hasattr(self.calibration, 'court_to_pixel') else self._estimate_z(bbox_size, 0, 0)
+            # Estimate ball height:
+            # Method 1: Known ball size + focal length → distance → height (if real bbox)
+            # Method 2: Pixel vertical velocity accumulator (for TrackNet's fixed bbox)
+            z = self._estimate_z_from_depth(cx, cy, bbox_size)
+            if z < 0.05 and hasattr(self.calibration, 'project_to_ground'):
+                z = self._estimate_z_from_camera(cx, cy)
 
             # Project to court coordinates
             if hasattr(self.calibration, 'project_to_height') and z > 0.2:
@@ -79,6 +83,66 @@ class BallTracker:
                    "timestamp": timestamp, "frame": frame_number, "detected": False}
             self.trajectory.append(pos)
             return pos
+
+    BALL_REAL_DIAMETER = 0.065  # padel ball = 6.5cm
+
+    def _estimate_z_from_depth(self, px: float, py: float, bbox_size: float) -> float:
+        """Estimate ball height using known ball size + camera focal length.
+
+        distance_from_camera = (focal_length × real_diameter) / pixel_diameter
+        Then: 3D position = camera_pos + distance × ray_direction
+        Height = 3D_position.z
+        """
+        try:
+            if bbox_size < 5 or bbox_size > 100:
+                return 0.0  # unreasonable size, skip
+
+            # Skip if bbox is the fake TrackNet fixed size (always ~20px)
+            if hasattr(self, '_bbox_sizes'):
+                self._bbox_sizes.append(bbox_size)
+                if len(self._bbox_sizes) > 30:
+                    self._bbox_sizes.pop(0)
+                # If all sizes are identical (±1px), it's TrackNet fake bbox
+                if len(self._bbox_sizes) > 10:
+                    unique = len(set(int(s) for s in self._bbox_sizes))
+                    if unique <= 2:  # all same size = fake bbox
+                        return 0.0
+            else:
+                self._bbox_sizes = [bbox_size]
+
+            # Need camera matrix for focal length
+            if not hasattr(self.calibration, 'camera_matrix') or self.calibration.camera_matrix is None:
+                return 0.0
+
+            focal_length = self.calibration.camera_matrix[0, 0]
+            if focal_length <= 0:
+                return 0.0
+
+            # Distance from camera
+            distance = (focal_length * self.BALL_REAL_DIAMETER) / bbox_size
+
+            # Get camera position and ray direction
+            import cv2 as cv
+            R, _ = cv.Rodrigues(self.calibration.rvec)
+            cam_pos = (-R.T @ self.calibration.tvec.flatten())
+
+            # Ray from camera through pixel
+            px_norm = np.array([
+                (px - self.calibration.camera_matrix[0, 2]) / focal_length,
+                (py - self.calibration.camera_matrix[1, 2]) / self.calibration.camera_matrix[1, 1],
+                1.0,
+            ])
+            ray_dir = R.T @ px_norm
+            ray_dir = ray_dir / np.linalg.norm(ray_dir)
+
+            # 3D ball position
+            ball_3d = cam_pos + distance * ray_dir
+
+            # Height is the Z component (Z is up in our court coordinate system)
+            height = float(ball_3d[2])
+            return round(max(0.0, min(height, 5.0)), 2)
+        except Exception:
+            return 0.0
 
     def _estimate_z_from_camera(self, px: float, py: float) -> float:
         """Estimate ball height using pixel-space vertical movement and camera model.
