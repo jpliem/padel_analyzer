@@ -117,8 +117,103 @@ def calibrate_court(match_id: str, req: CalibrationRequest):
     cal.calibrate(np.array(req.corners, dtype=np.float32))
     match_data = _load_match(match_id)
     match_data["calibration"] = cal.to_dict()
+    match_data["calibration_points"] = {
+        "corners": req.corners,
+    }
     _save_match(match_id, match_data)
     return {"status": "calibrated", "match_id": match_id}
+
+
+@app.delete("/match/{match_id}/analysis")
+def delete_analysis(match_id: str):
+    """Delete analysis results so match can be re-analyzed."""
+    _load_match(match_id)
+    match_dir = _match_dir(match_id)
+    for fname in ["results.json", "annotated.mp4"]:
+        path = os.path.join(match_dir, fname)
+        if os.path.exists(path):
+            os.remove(path)
+    _active_analyzers.pop(match_id, None)
+    _analysis_jobs.pop(match_id, None)
+    return {"status": "deleted", "match_id": match_id}
+
+
+# ── Calibration Templates ──────────────────────────────────────────────
+
+TEMPLATES_DIR = "data/templates"
+
+
+class SaveTemplateRequest(BaseModel):
+    name: str
+    corners: List[List[float]]
+    net_points: Optional[List[List[float]]] = None
+    thumbnail: Optional[str] = None  # base64 JPEG
+
+
+@app.get("/templates")
+def list_templates():
+    if not os.path.exists(TEMPLATES_DIR):
+        return {"templates": []}
+    templates = []
+    for fname in os.listdir(TEMPLATES_DIR):
+        if fname.endswith(".json"):
+            with open(os.path.join(TEMPLATES_DIR, fname)) as f:
+                t = json.load(f)
+                templates.append({
+                    "id": fname.replace(".json", ""),
+                    "name": t.get("name", "Unknown"),
+                    "has_thumbnail": t.get("thumbnail") is not None,
+                })
+    return {"templates": templates}
+
+
+@app.get("/templates/{template_id}")
+def get_template(template_id: str):
+    path = os.path.join(TEMPLATES_DIR, f"{template_id}.json")
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Template not found")
+    with open(path) as f:
+        return json.load(f)
+
+
+@app.post("/templates")
+def save_template(req: SaveTemplateRequest):
+    os.makedirs(TEMPLATES_DIR, exist_ok=True)
+    template_id = str(uuid.uuid4())[:8]
+    data = {
+        "id": template_id,
+        "name": req.name,
+        "corners": req.corners,
+        "net_points": req.net_points,
+        "thumbnail": req.thumbnail,
+    }
+    with open(os.path.join(TEMPLATES_DIR, f"{template_id}.json"), "w") as f:
+        json.dump(data, f, indent=2)
+    return {"id": template_id, "status": "saved"}
+
+
+@app.get("/templates/{template_id}/thumbnail")
+def get_template_thumbnail(template_id: str):
+    path = os.path.join(TEMPLATES_DIR, f"{template_id}.json")
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Template not found")
+    with open(path) as f:
+        data = json.load(f)
+    if not data.get("thumbnail"):
+        raise HTTPException(status_code=404, detail="No thumbnail")
+    import base64
+    img_bytes = base64.b64decode(data["thumbnail"])
+    from fastapi.responses import Response
+    return Response(content=img_bytes, media_type="image/jpeg")
+
+
+@app.delete("/templates/{template_id}")
+def delete_template(template_id: str):
+    path = os.path.join(TEMPLATES_DIR, f"{template_id}.json")
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Template not found")
+    os.remove(path)
+    return {"status": "deleted"}
 
 
 _active_analyzers: Dict[str, object] = {}

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import { Panel, Group, Separator } from 'react-resizable-panels';
-import { startMatchAnalysis, getAnalysisStatus, getScore, getEvents, getTrajectory, getAnnotatedVideoUrl, getPositions, uploadVideo, startAnalysis } from '../api';
+import { startMatchAnalysis, getAnalysisStatus, getScore, getEvents, getTrajectory, getAnnotatedVideoUrl, getPositions, uploadVideo, startAnalysis, deleteAnalysis } from '../api';
 import Scoreboard from '../components/Scoreboard';
 import EventLog from '../components/EventLog';
 import CourtMiniMap from '../components/CourtMiniMap';
@@ -172,9 +172,34 @@ const OfflineAnalysis: React.FC = () => {
           </div>
         )}
         {status === 'complete' && (
-          <span style={{ fontSize: 12, color: '#00b894', fontWeight: 500 }}>
-            Complete — {trajectory.length} ball points, {events.length} events
-          </span>
+          <>
+            <span style={{ fontSize: 12, color: '#00b894', fontWeight: 500, flex: 1 }}>
+              Complete — {trajectory.length} ball points, {events.length} events
+            </span>
+            <button
+              className="btn btn-danger"
+              style={{ fontSize: 11, padding: '4px 12px' }}
+              onClick={async () => {
+                if (!id || !window.confirm('Delete analysis results and re-analyze?')) return;
+                await deleteAnalysis(id);
+                setStatus('loading');
+                setScore(null);
+                setEvents([]);
+                setTrajectory([]);
+                setPositions([]);
+                try {
+                  await startMatchAnalysis(id);
+                  setStatus('processing');
+                  setPercent(0);
+                  startPolling();
+                } catch {
+                  setStatus('needs_upload');
+                }
+              }}
+            >
+              Re-analyze
+            </button>
+          </>
         )}
         {error && <span style={{ fontSize: 12, color: '#e17055' }}>{error}</span>}
       </div>

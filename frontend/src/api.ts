@@ -103,3 +103,39 @@ export async function correctScore(matchId: string, team: number): Promise<void>
     body: JSON.stringify({ team }),
   });
 }
+
+export async function deleteAnalysis(matchId: string): Promise<void> {
+  await fetchJSON(`${API}/match/${matchId}/analysis`, { method: 'DELETE' });
+}
+
+// Templates
+export interface CalibrationTemplate {
+  id: string;
+  name: string;
+  corners: number[][];
+  net_points?: number[][] | null;
+  thumbnail?: string | null;
+  has_thumbnail?: boolean;
+}
+
+export async function listTemplates(): Promise<{ templates: CalibrationTemplate[] }> {
+  return fetchJSON(`${API}/templates`);
+}
+
+export async function getTemplate(id: string): Promise<CalibrationTemplate> {
+  return fetchJSON(`${API}/templates/${id}`);
+}
+
+export async function saveTemplate(data: {
+  name: string; corners: number[][]; net_points?: number[][] | null; thumbnail?: string | null;
+}): Promise<{ id: string }> {
+  return fetchJSON(`${API}/templates`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteTemplate(id: string): Promise<void> {
+  await fetchJSON(`${API}/templates/${id}`, { method: 'DELETE' });
+}

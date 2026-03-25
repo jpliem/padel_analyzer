@@ -52,7 +52,8 @@ const CalibrationCanvas: React.FC<Props> = ({ videoFile, corners, onCornerClick,
       corners.forEach((c, i) => {
         ctx.beginPath();
         ctx.arc(c[0], c[1], 8, 0, Math.PI * 2);
-        ctx.fillStyle = '#74b9ff';
+        // First 4 points are corners (blue), rest are net/extra (purple)
+        ctx.fillStyle = i < 4 ? '#74b9ff' : '#6c5ce7';
         ctx.fill();
         ctx.strokeStyle = 'white';
         ctx.lineWidth = 2;
@@ -61,13 +62,25 @@ const CalibrationCanvas: React.FC<Props> = ({ videoFile, corners, onCornerClick,
         ctx.font = 'bold 10px sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(String(i + 1), c[0], c[1]);
+        const label = i < 4 ? `C${i + 1}` : `N${i - 3}`;
+        ctx.fillText(label, c[0], c[1]);
       });
+
+      // Draw net line if net points exist (points 5 and 6)
+      if (corners.length > 5) {
+        ctx.beginPath();
+        ctx.moveTo(corners[4][0], corners[4][1]);
+        ctx.lineTo(corners[5][0], corners[5][1]);
+        ctx.strokeStyle = '#fdcb6e';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([]);
+        ctx.stroke();
+      }
     }
   }, [corners, videoFile]);
 
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (corners.length >= 4) return;
+    // Max points handled by parent component
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
@@ -83,7 +96,7 @@ const CalibrationCanvas: React.FC<Props> = ({ videoFile, corners, onCornerClick,
       <video ref={videoRef} style={{ display: 'none' }} muted />
       {videoFile ? (
         <canvas ref={canvasRef} onClick={handleCanvasClick}
-          style={{ maxWidth: '100%', maxHeight: '100%', cursor: corners.length < 4 ? 'crosshair' : 'default' }} />
+          style={{ maxWidth: '100%', maxHeight: '100%', cursor: 'crosshair' }} />
       ) : (
         <div style={{ color: '#888', textAlign: 'center', padding: 40 }}>
           <div style={{ fontSize: 18, marginBottom: 8 }}>Upload a video to calibrate</div>
@@ -96,7 +109,7 @@ const CalibrationCanvas: React.FC<Props> = ({ videoFile, corners, onCornerClick,
         </div>
       )}
       <div style={{ position: 'absolute', bottom: 12, left: 12, padding: '4px 10px', background: 'rgba(116,185,255,0.2)', border: '1px solid #74b9ff', borderRadius: 6, color: '#74b9ff', fontSize: 11 }}>
-        {corners.length}/4 corners set
+        {Math.min(corners.length, 4)}/4 corners{corners.length > 4 ? ` + ${corners.length - 4} ref` : ''}
       </div>
     </div>
   );
