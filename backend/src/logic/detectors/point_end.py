@@ -6,17 +6,22 @@ NET_Y = 10.0
 
 
 class PointEndDetector:
-    def __init__(self, config: EventDetectorConfig):
+    def __init__(self, config: EventDetectorConfig, court_model=None):
         self._config = config
         self._bounces_per_side: Dict[str, int] = {"near": 0, "far": 0}
         self._stopped_frames = 0
         self._frames_since_last_bounce = 0
         self._had_bounce = False
         self._last_bounce_side: Optional[str] = None
-        self._bounds = config.enclosure_bounds
+        if court_model:
+            b = court_model.get_bounds()
+            self._bounds = {"x_min": b["x_min"] - 0.5, "x_max": b["x_max"] + 0.5,
+                            "y_min": b["y_min"] - 1.0, "y_max": b["y_max"] + 1.0}
+        else:
+            self._bounds = config.enclosure_bounds
 
     def check(self, bounce: Optional[Dict], ball_pos: Optional[Dict],
-              ball_lost: bool) -> Optional[Dict]:
+              ball_lost: bool, wall_hit=None) -> Optional[Dict]:
 
         # 1. Ball lost
         if ball_lost:
@@ -32,15 +37,10 @@ class PointEndDetector:
                 y < self._bounds["y_min"] or y > self._bounds["y_max"]):
             return {"reason": PointReason.OUT, "x": x, "y": y}
 
-        # 3. Wall before bounce
-        wall_margin = 0.3
-        near_wall = (x <= self._bounds["x_min"] + wall_margin or
-                     x >= self._bounds["x_max"] - wall_margin or
-                     y <= self._bounds["y_min"] + wall_margin or
-                     y >= self._bounds["y_max"] - wall_margin)
-        if near_wall and ball_pos.get("z", 0) > 0.5:
+        # 3. Wall before bounce (from WallCollisionDetector)
+        if wall_hit and self._had_bounce:
             ball_side = "near" if y < NET_Y else "far"
-            if self._bounces_per_side[ball_side] == 0 and self._had_bounce:
+            if self._bounces_per_side[ball_side] == 0:
                 return {"reason": PointReason.WALL_BEFORE_BOUNCE, "side": ball_side}
 
         # 4. Ball stopped

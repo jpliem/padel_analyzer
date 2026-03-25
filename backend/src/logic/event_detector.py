@@ -6,11 +6,14 @@ from logic.detectors.bounce import BounceDetector
 from logic.detectors.last_hitter import LastHitterDetector
 from logic.detectors.serve import ServeDetector
 from logic.detectors.point_end import PointEndDetector
+from logic.detectors.wall_collision import WallCollisionDetector
+from models.court_model import PadelCourtModel
 
 
 class EventDetector:
     def __init__(self, config: EventDetectorConfig, calibration,
-                 scoring_engine, player_tracker, team_map: Dict[str, int]):
+                 scoring_engine, player_tracker, team_map: Dict[str, int],
+                 court_model: PadelCourtModel = None):
         self._config = config
         self._calibration = calibration
         self._scoring_engine = scoring_engine
@@ -24,7 +27,9 @@ class EventDetector:
             config, calibration,
             current_server=getattr(scoring_engine, 'current_server', None)
         )
-        self._point_end_detector = PointEndDetector(config)
+        self._point_end_detector = PointEndDetector(config, court_model=court_model)
+        self._wall_detector = WallCollisionDetector(court_model) if court_model else None
+        self._prev_ball_pos = None
 
     def process(self, ball_pos: Optional[Dict], player_positions: List[Dict],
                 frame_no: int) -> List[MatchEvent]:
@@ -72,7 +77,14 @@ class EventDetector:
             if hit is not None:
                 events.append(self._make_event(EventType.HIT, frame_no, ball_pos, {"track_id": hit["track_id"]}))
 
-            point_end = self._point_end_detector.check(bounce, ball_pos, ball_lost)
+            wall_hit = None
+            if self._wall_detector:
+                wall_hit = self._wall_detector.check(ball_pos, self._prev_ball_pos)
+                if wall_hit:
+                    events.append(self._make_event(EventType.WALL_HIT, frame_no, ball_pos, wall_hit))
+            self._prev_ball_pos = ball_pos
+
+            point_end = self._point_end_detector.check(bounce, ball_pos, ball_lost, wall_hit=wall_hit)
             if point_end is not None:
                 reason = point_end["reason"]
                 side = point_end.get("side")
@@ -125,6 +137,9 @@ class EventDetector:
         self._last_hitter.reset()
         self._serve_detector.reset()
         self._point_end_detector.reset()
+        if self._wall_detector:
+            self._wall_detector.reset()
+        self._prev_ball_pos = None
 
     @staticmethod
     def _make_event(event_type: EventType, frame_no: int,

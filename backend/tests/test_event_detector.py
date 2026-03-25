@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import MagicMock
 from models.config import EventDetectorConfig
-from models.types import MatchState, PointReason, TeamId, ServerInfo
+from models.types import MatchState, PointReason, TeamId, ServerInfo, EventType
 
 
 @pytest.fixture
@@ -65,3 +65,26 @@ class TestEventDetector:
         ed.state_machine.on_point_ended(PointReason.DOUBLE_BOUNCE)
         ed._resolve_point_end(PointReason.DOUBLE_BOUNCE, "near", last_hitter_track_id=1)
         mock_scoring.add_point.assert_called_once()
+
+
+def test_wall_hit_event_emitted(mock_calibration, mock_scoring, mock_player_tracker):
+    from logic.event_detector import EventDetector
+    from models.court_model import PadelCourtModel
+    config = EventDetectorConfig()
+    court = PadelCourtModel()
+    team_map = {"P1": 1, "P2": 1, "P3": 2, "P4": 2}
+    ed = EventDetector(config, mock_calibration, mock_scoring,
+                       mock_player_tracker, team_map, court_model=court)
+    # Put into RALLY state
+    ed.state_machine.on_serve_started()
+    ed.state_machine.on_serve_result(True)
+    # First frame: ball in court
+    ed.process(ball_pos={"x": 5.0, "y": 1.0, "z": 1.5, "speed": 60.0},
+               player_positions=[], frame_no=99)
+    # Second frame: ball crossed back wall
+    events = ed.process(
+        ball_pos={"x": 5.0, "y": -0.1, "z": 1.5, "speed": 60.0},
+        player_positions=[], frame_no=100)
+    wall_events = [e for e in events if e.event_type == EventType.WALL_HIT]
+    assert len(wall_events) >= 1
+    assert "wall_id" in wall_events[0].metadata
