@@ -27,7 +27,7 @@ class VideoAnalyzer:
                  config: EventDetectorConfig = None,
                  match_config: MatchConfig = None,
                  detector_type: str = "yolo",
-                 tracknet_model_path: str = "models/tracknetv2.pt"):
+                 tracknet_model_path: str = "models/tracknet_tennis.pt"):
         config = config or EventDetectorConfig()
         match_config = match_config or MatchConfig()
 
