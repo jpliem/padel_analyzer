@@ -4,6 +4,7 @@ import numpy as np
 from models.config import EventDetectorConfig
 
 
+
 @pytest.fixture
 def mock_deps():
     calibration = MagicMock()
@@ -64,3 +65,29 @@ class TestVideoAnalyzer:
             assert not va._auto_assigned
             va.process_frame(frame, 2)
             assert va._auto_assigned
+
+    def test_detector_type_tracknet(self, mock_deps):
+        from pipeline.video_analyzer import VideoAnalyzer
+        calibration, config = mock_deps
+
+        with patch('pipeline.video_analyzer.UnifiedYoloDetector') as MockUnified, \
+             patch('pipeline.video_analyzer.TrackNetBallDetector') as MockTrackNet:
+            mock_unified = MockUnified.return_value
+            mock_result = MagicMock()
+            xyxy = np.array([]).reshape(0, 4)
+            mock_result.boxes.xyxy.cpu.return_value.numpy.return_value = xyxy
+            mock_result.boxes.cls.cpu.return_value.numpy.return_value = np.array([])
+            mock_result.boxes.conf.cpu.return_value.numpy.return_value = np.array([])
+            mock_unified.run.return_value = mock_result
+
+            mock_tracknet = MockTrackNet.return_value
+            mock_tracknet.detect.return_value = None
+
+            va = VideoAnalyzer(
+                match_id="test",
+                calibration=calibration,
+                config=config,
+                detector_type="tracknet",
+            )
+            # Should have created TrackNetBallDetector
+            MockTrackNet.assert_called_once()

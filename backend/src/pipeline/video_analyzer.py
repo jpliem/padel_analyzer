@@ -6,6 +6,7 @@ import cv2
 from models.config import EventDetectorConfig
 from models.types import MatchEvent, MatchConfig, ServerInfo, TeamId
 from cv.detectors.yolo import UnifiedYoloDetector, YoloBallDetector, YoloPlayerDetector
+from cv.detectors.tracknet import TrackNetBallDetector
 from cv.ball_tracker import BallTracker
 from cv.player_tracker import PlayerTracker
 from logic.event_detector import EventDetector
@@ -24,13 +25,25 @@ class FrameResult:
 class VideoAnalyzer:
     def __init__(self, match_id: str, calibration,
                  config: EventDetectorConfig = None,
-                 match_config: MatchConfig = None):
+                 match_config: MatchConfig = None,
+                 detector_type: str = "yolo",
+                 tracknet_model_path: str = "models/tracknetv2.pt"):
         config = config or EventDetectorConfig()
         match_config = match_config or MatchConfig()
 
+        # Always create YOLO (needed for player detection + ball fallback)
         unified = UnifiedYoloDetector()
-        self.ball_detector = YoloBallDetector(unified)
         self.player_detector = YoloPlayerDetector(unified)
+
+        # Ball detector: YOLO or TrackNet
+        if detector_type == "tracknet":
+            yolo_fallback = YoloBallDetector(unified)
+            self.ball_detector = TrackNetBallDetector(
+                model_path=tracknet_model_path,
+                yolo_fallback=yolo_fallback,
+            )
+        else:
+            self.ball_detector = YoloBallDetector(unified)
 
         self.ball_tracker = BallTracker(calibration)
         self.player_tracker = PlayerTracker(calibration)
