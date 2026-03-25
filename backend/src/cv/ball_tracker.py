@@ -37,7 +37,11 @@ class BallTracker:
             cx = (bbox[0] + bbox[2]) / 2.0
             cy = (bbox[1] + bbox[3]) / 2.0
             bbox_size = max(bbox[2] - bbox[0], bbox[3] - bbox[1])
-            court_x, court_y = self.calibration.pixel_to_court(cx, cy)
+            # Use CameraModel.project_to_ground if available, else CourtCalibration.pixel_to_court
+            if hasattr(self.calibration, 'project_to_ground'):
+                court_x, court_y = self.calibration.project_to_ground(cx, cy)
+            else:
+                court_x, court_y = self.calibration.pixel_to_court(cx, cy)
             z = self._estimate_z(bbox_size, court_x, court_y)
             if not self._initialized:
                 self._kf.x = np.array([court_x, court_y, 0, 0])

@@ -1,7 +1,6 @@
 import numpy as np
 import supervision as sv
 from typing import List, Dict, Optional
-from cv.court_calibration import CourtCalibration
 
 
 class PlayerTracker:
@@ -11,7 +10,8 @@ class PlayerTracker:
     COURT_X_MIN, COURT_X_MAX = -2.0, 12.0
     COURT_Y_MIN, COURT_Y_MAX = -3.0, 23.0
 
-    def __init__(self, calibration: CourtCalibration, fps: float = 30.0):
+    def __init__(self, calibration, fps: float = 30.0):
+        """Accept either CourtCalibration or CameraModel for projection."""
         self.calibration = calibration
         self._byte_track = sv.ByteTrack(
             frame_rate=int(fps),
@@ -60,7 +60,11 @@ class PlayerTracker:
             cy_foot = y2
 
             try:
-                court_x, court_y = self.calibration.pixel_to_court(cx, cy_foot)
+                # Use CameraModel.project_to_ground if available, else CourtCalibration.pixel_to_court
+                if hasattr(self.calibration, 'project_to_ground'):
+                    court_x, court_y = self.calibration.project_to_ground(cx, cy_foot)
+                else:
+                    court_x, court_y = self.calibration.pixel_to_court(cx, cy_foot)
             except Exception:
                 continue
 

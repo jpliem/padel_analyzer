@@ -32,6 +32,7 @@ const Calibration: React.FC = () => {
   const navigate = useNavigate();
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [keypoints, setKeypoints] = useState<number[][]>([]);
+  const [netTopPoints, setNetTopPoints] = useState<number[][]>([]);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -48,6 +49,9 @@ const Calibration: React.FC = () => {
   const handleClick = (x: number, y: number) => {
     if (keypoints.length < 12) {
       setKeypoints([...keypoints, [x, y]]);
+    } else if (netTopPoints.length < 2) {
+      // After 12 ground keypoints, collect 2 net top points
+      setNetTopPoints([...netTopPoints, [x, y]]);
     }
   };
 
@@ -56,8 +60,8 @@ const Calibration: React.FC = () => {
     setSaving(true);
     setError(null);
     try {
-      // Send all keypoints as "corners" — backend detects 12-keypoint mode
-      await calibrate(id, keypoints, null);
+      // Send ground keypoints + optional net top points for 3D camera model
+      await calibrate(id, keypoints, null, netTopPoints.length === 2 ? netTopPoints : null);
       if (videoFile) {
         await uploadVideo(id, videoFile);
       }
@@ -153,11 +157,11 @@ const Calibration: React.FC = () => {
 
         {/* Progress bar */}
         <div>
-          <div className="label">Keypoints: {progress}/12</div>
+          <div className="label">Keypoints: {progress}/12 {netTopPoints.length > 0 ? `+ ${netTopPoints.length}/2 net tops` : ''}</div>
           <div style={{ height: 6, background: '#e8e8e8', borderRadius: 3, overflow: 'hidden' }}>
             <div style={{
-              width: `${(progress / 12) * 100}%`, height: '100%',
-              background: progress >= 12 ? '#00b894' : progress >= 4 ? '#fdcb6e' : '#74b9ff',
+              width: `${((progress + netTopPoints.length) / 14) * 100}%`, height: '100%',
+              background: netTopPoints.length === 2 ? '#6c5ce7' : progress >= 12 ? '#00b894' : progress >= 4 ? '#fdcb6e' : '#74b9ff',
               borderRadius: 3, transition: 'width 0.2s',
             }} />
           </div>
@@ -172,8 +176,15 @@ const Calibration: React.FC = () => {
         }}>
           {progress < 12 ? (
             <>Click: <strong>{currentLabel}</strong></>
+          ) : netTopPoints.length < 2 ? (
+            <>
+              <strong style={{ color: '#6c5ce7' }}>
+                Now click TOP of {netTopPoints.length === 0 ? 'left' : 'right'} net post (for 3D)
+              </strong>
+              <br /><span style={{ fontSize: 11, color: '#888' }}>Or save now with 2D-only mode</span>
+            </>
           ) : (
-            <strong>All 12 keypoints set — ready to save!</strong>
+            <strong style={{ color: '#6c5ce7' }}>3D calibration ready — net height reference set!</strong>
           )}
         </div>
 

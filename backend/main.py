@@ -36,7 +36,10 @@ class MatchSetupRequest(BaseModel):
 
 class CalibrationRequest(BaseModel):
     corners: List[List[float]]  # 4 corners (legacy) or 12 keypoints
-    net_points: Optional[List[List[float]]] = None  # 2 net posts (legacy mode only)
+    net_points: Optional[List[List[float]]] = None  # 2 net post ground points
+    net_top_points: Optional[List[List[float]]] = None  # 2 net post TOP points (for 3D)
+    image_width: Optional[int] = 1280
+    image_height: Optional[int] = 720
 
 
 def _match_dir(match_id: str) -> str:
@@ -56,6 +59,24 @@ def _save_match(match_id: str, data: dict):
     os.makedirs(d, exist_ok=True)
     with open(os.path.join(d, "config.json"), "w") as f:
         json.dump(data, f, indent=2)
+
+
+def _load_calibration(match_data: dict):
+    """Load the best available calibration — CameraModel (3D) or CourtCalibration (2D)."""
+    from cv.court_calibration import CourtCalibration
+    from cv.camera_model import CameraModel
+
+    # Prefer CameraModel if available
+    if match_data.get("camera_model"):
+        cam = CameraModel.from_dict(match_data["camera_model"])
+        if cam.has_3d():
+            return cam
+
+    # Fallback to CourtCalibration
+    if match_data.get("calibration"):
+        return CourtCalibration.from_dict(match_data["calibration"])
+
+    return CourtCalibration()
 
 
 @app.get("/")
@@ -112,28 +133,42 @@ def get_match(match_id: str):
 def calibrate_court(match_id: str, req: CalibrationRequest):
     import numpy as np
     from cv.court_calibration import CourtCalibration
-    cal = CourtCalibration()
+    from cv.camera_model import CameraModel
 
     n_points = len(req.corners)
+    if n_points < 4:
+        raise HTTPException(status_code=400, detail=f"Need at least 4 keypoints, got {n_points}")
+
+    # Legacy CourtCalibration (for backward compat)
+    cal = CourtCalibration()
     if n_points >= 12:
-        # 12-keypoint mode (best accuracy)
         cal.calibrate_keypoints(req.corners)
-    elif n_points == 4:
-        # Legacy 4-corner mode with optional net points
+    else:
         net = np.array(req.net_points, dtype=np.float32) if req.net_points else None
         cal.calibrate(np.array(req.corners, dtype=np.float32), net_pixels=net)
-    else:
-        raise HTTPException(status_code=400, detail=f"Need 4 corners or 12 keypoints, got {n_points}")
+
+    # New: 3D CameraModel (for accurate projection)
+    cam = CameraModel()
+    cam.calibrate(
+        keypoints_2d=req.corners,
+        net_top_2d=req.net_top_points,
+        image_width=req.image_width or 1280,
+        image_height=req.image_height or 720,
+    )
+
+    mode = "3d" if cam.has_3d() else ("12-keypoint" if n_points >= 12 else "4-corner")
 
     match_data = _load_match(match_id)
     match_data["calibration"] = cal.to_dict()
+    match_data["camera_model"] = cam.to_dict()
     match_data["calibration_points"] = {
         "corners": req.corners,
         "net_points": req.net_points,
-        "mode": "12-keypoint" if n_points >= 12 else "4-corner",
+        "net_top_points": req.net_top_points,
+        "mode": mode,
     }
     _save_match(match_id, match_data)
-    return {"status": "calibrated", "match_id": match_id, "mode": "12-keypoint" if n_points >= 12 else "4-corner"}
+    return {"status": "calibrated", "match_id": match_id, "mode": mode}
 
 
 @app.delete("/match/{match_id}/analysis")
@@ -320,9 +355,7 @@ def start_match_analysis(match_id: str, background_tasks: BackgroundTasks,
     from models.config import EventDetectorConfig
     from pipeline.video_analyzer import VideoAnalyzer
 
-    cal = CourtCalibration()
-    if match_data.get("calibration"):
-        cal = CourtCalibration.from_dict(match_data["calibration"])
+    cal = _load_calibration(match_data)
 
     config = EventDetectorConfig()
     analyzer = VideoAnalyzer(match_id=match_id, calibration=cal, config=config,
@@ -437,9 +470,7 @@ def start_analysis(job_id: str, background_tasks: BackgroundTasks):
     from models.config import EventDetectorConfig
     from pipeline.video_analyzer import VideoAnalyzer
 
-    cal = CourtCalibration()
-    if match_data.get("calibration"):
-        cal = CourtCalibration.from_dict(match_data["calibration"])
+    cal = _load_calibration(match_data)
 
     config = EventDetectorConfig()
     detector_type = job.get("detector_type", "yolo")
@@ -516,9 +547,7 @@ def start_live(req: LiveStartRequest):
     from pipeline.video_analyzer import VideoAnalyzer
     from pipeline.live_manager import LiveManager
 
-    cal = CourtCalibration()
-    if match_data.get("calibration"):
-        cal = CourtCalibration.from_dict(match_data["calibration"])
+    cal = _load_calibration(match_data)
 
     config = EventDetectorConfig()
     analyzer = VideoAnalyzer(match_id=req.match_id, calibration=cal, config=config)
