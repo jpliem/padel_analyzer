@@ -6,6 +6,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, BackgroundTasks, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Dict, List, Optional
 import json
@@ -186,6 +187,15 @@ def get_trajectory(match_id: str):
     return {"trajectory": []}
 
 
+@app.get("/match/{match_id}/annotated")
+def get_annotated_video(match_id: str):
+    _load_match(match_id)
+    video_path = os.path.join(_match_dir(match_id), "annotated.mp4")
+    if not os.path.exists(video_path):
+        raise HTTPException(status_code=404, detail="Annotated video not available")
+    return FileResponse(video_path, media_type="video/mp4", filename="annotated.mp4")
+
+
 @app.get("/match/{match_id}/stats")
 def get_stats(match_id: str):
     _load_match(match_id)
@@ -264,7 +274,9 @@ def start_analysis(job_id: str, background_tasks: BackgroundTasks):
     def run_analysis():
         _analysis_jobs[job_id]["state"] = "processing"
         try:
-            result = analyzer.analyze_video(video_path, progress_callback=progress_cb)
+            annotated_path = os.path.join(_match_dir(match_id), "annotated.mp4")
+            result = analyzer.analyze_video(video_path, progress_callback=progress_cb,
+                                            annotated_path=annotated_path)
             _analysis_jobs[job_id]["state"] = "complete"
             _analysis_jobs[job_id]["percent"] = 100
             # Save results to disk so they persist across server restarts

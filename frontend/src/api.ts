@@ -5,6 +5,10 @@ import type {
 
 const API = 'http://localhost:8000';
 
+export function getAnnotatedVideoUrl(matchId: string): string {
+  return `${API}/match/${matchId}/annotated`;
+}
+
 async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(url, options);
   if (!res.ok) {

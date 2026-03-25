@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import { Panel, Group, Separator } from 'react-resizable-panels';
-import { uploadVideo, startAnalysis, getAnalysisStatus, getScore, getEvents, getTrajectory } from '../api';
+import { uploadVideo, startAnalysis, getAnalysisStatus, getScore, getEvents, getTrajectory, getAnnotatedVideoUrl } from '../api';
 import Scoreboard from '../components/Scoreboard';
 import EventLog from '../components/EventLog';
 import CourtMiniMap from '../components/CourtMiniMap';
@@ -106,12 +106,14 @@ const OfflineAnalysis: React.FC = () => {
         <Panel defaultSize={65} minSize={40}>
           <div style={{ height: '100%', background: '#111', display: 'flex', flexDirection: 'column' }}>
             <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
-              {videoUrl ? (
+              {status === 'complete' && id ? (
+                <video ref={videoRef} src={getAnnotatedVideoUrl(id)} controls muted style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
+              ) : videoUrl ? (
                 <video ref={videoRef} src={videoUrl} controls muted style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
               ) : (
                 <div style={{ color: '#555', fontSize: 14 }}>Upload a video to begin analysis</div>
               )}
-              {score && (
+              {score && status !== 'complete' && (
                 <div style={{ position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)' }}>
                   <Scoreboard score={score} variant="overlay" />
                 </div>

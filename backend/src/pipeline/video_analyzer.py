@@ -87,19 +87,32 @@ class VideoAnalyzer:
         )
 
     def analyze_video(self, video_path: str,
-                      progress_callback: Optional[Callable] = None) -> Dict:
+                      progress_callback: Optional[Callable] = None,
+                      annotated_path: Optional[str] = None) -> Dict:
         cap = cv2.VideoCapture(video_path)
         fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         self.ball_tracker.fps = fps
         self.ball_tracker.dt = 1.0 / fps
+
+        writer = None
+        if annotated_path:
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            writer = cv2.VideoWriter(annotated_path, fourcc, fps, (w, h))
 
         frame_no = 0
         while cap.isOpened():
             ret, frame = cap.read()
             if not ret:
                 break
-            self.process_frame(frame, frame_no)
+            result = self.process_frame(frame, frame_no)
+
+            if writer:
+                annotated = self._draw_overlays(frame, result)
+                writer.write(annotated)
+
             frame_no += 1
 
             if progress_callback and frame_no % 30 == 0:
@@ -107,12 +120,79 @@ class VideoAnalyzer:
                 progress_callback(frame_no, total_frames, pct)
 
         cap.release()
+        if writer:
+            writer.release()
+
         return {
             "match_id": self._match_id,
             "frames_processed": frame_no,
             "events": len(self.all_events),
             "final_score": self.scoring_engine.get_score_display(),
         }
+
+    def _draw_overlays(self, frame: np.ndarray, result: FrameResult) -> np.ndarray:
+        """Draw detection bounding boxes, ball trail, and score on the frame."""
+        out = frame.copy()
+
+        # Draw player bounding boxes
+        for p in result.player_positions:
+            bbox = p.get("bbox", [])
+            if len(bbox) == 4:
+                x1, y1, x2, y2 = [int(v) for v in bbox]
+                # Determine team color
+                player_id = self.player_tracker.get_player_id(p["track_id"])
+                if player_id and player_id in ("P1", "P2"):
+                    color = (255, 185, 116)  # blue (BGR)
+                else:
+                    color = (85, 112, 225)  # red (BGR)
+                cv2.rectangle(out, (x1, y1), (x2, y2), color, 2)
+                label = player_id or f"#{p['track_id']}"
+                cv2.putText(out, label, (x1, y1 - 8),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+
+        # Draw ball position
+        if result.ball_position and result.ball_position.get("detected"):
+            # Get ball pixel position from trajectory (reverse of court coords)
+            # Use raw detection bbox from detector cache
+            pass
+
+        # Draw ball trail on court (last 15 trajectory points as dots)
+        trail = self.ball_tracker.trajectory[-15:]
+        for i, tp in enumerate(trail):
+            try:
+                px, py = self.ball_tracker.calibration.court_to_pixel(tp["x"], tp["y"])
+                alpha = 0.3 + 0.7 * (i / max(len(trail) - 1, 1))
+                radius = max(2, int(4 * alpha))
+                cv2.circle(out, (int(px), int(py)), radius, (0, 230, 255), -1)
+            except Exception:
+                pass
+
+        # Draw ball current position (larger, brighter)
+        if result.ball_position:
+            try:
+                px, py = self.ball_tracker.calibration.court_to_pixel(
+                    result.ball_position["x"], result.ball_position["y"])
+                cv2.circle(out, (int(px), int(py)), 8, (0, 255, 255), -1)
+                cv2.circle(out, (int(px), int(py)), 10, (0, 200, 255), 2)
+                # Speed label
+                speed = result.ball_position.get("speed", 0)
+                if speed > 0:
+                    cv2.putText(out, f"{speed:.0f} km/h", (int(px) + 12, int(py) - 5),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+            except Exception:
+                pass
+
+        # Draw score overlay (top center)
+        score = result.score
+        score_text = f"{score['score']}  |  G: {score['games']}  |  S: {score['sets']}"
+        text_size = cv2.getTextSize(score_text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)[0]
+        tx = (out.shape[1] - text_size[0]) // 2
+        # Background rectangle
+        cv2.rectangle(out, (tx - 10, 5), (tx + text_size[0] + 10, 35), (0, 0, 0), -1)
+        cv2.putText(out, score_text, (tx, 28),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+
+        return out
 
     def _auto_assign_players(self, current_positions: List[Dict]):
         if len(current_positions) < 2:
