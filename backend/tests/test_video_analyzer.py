@@ -61,9 +61,11 @@ class TestVideoAnalyzer:
 
             va.process_frame(frame, 0)
             assert not va._auto_assigned
-            va.process_frame(frame, 1)
+            # Assignment happens at frame 30 (first multiple of 30 >= auto_assign_after_frames)
+            for i in range(1, 30):
+                va.process_frame(frame, i)
             assert not va._auto_assigned
-            va.process_frame(frame, 2)
+            va.process_frame(frame, 30)
             assert va._auto_assigned
 
     def test_detector_type_tracknet(self, mock_deps):

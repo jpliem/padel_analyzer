@@ -85,7 +85,8 @@ class VideoAnalyzer:
         ball_pos = self.ball_tracker.update(ball_bbox, frame_no)
         player_pos = self.player_tracker.update(player_detections, frame_no)
 
-        if not self._auto_assigned and frame_no >= self._config.auto_assign_after_frames:
+        # Re-assign players every 30 frames to handle track ID changes
+        if frame_no >= self._config.auto_assign_after_frames and frame_no % 30 == 0:
             self._auto_assign_players(player_pos)
             self._auto_assigned = True
 

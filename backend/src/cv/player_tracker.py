@@ -8,17 +8,17 @@ class PlayerTracker:
     """Player tracker using supervision's ByteTrack for stable track IDs."""
 
     # Enclosure bounds for filtering non-players
-    COURT_X_MIN, COURT_X_MAX = -1.0, 11.0
-    COURT_Y_MIN, COURT_Y_MAX = -2.0, 22.0
+    COURT_X_MIN, COURT_X_MAX = -2.0, 12.0
+    COURT_Y_MIN, COURT_Y_MAX = -3.0, 23.0
 
     def __init__(self, calibration: CourtCalibration, fps: float = 30.0):
         self.calibration = calibration
         self._byte_track = sv.ByteTrack(
             frame_rate=int(fps),
-            track_activation_threshold=0.5,
-            lost_track_buffer=30,
-            minimum_matching_threshold=0.8,
-            minimum_consecutive_frames=3,
+            track_activation_threshold=0.4,
+            lost_track_buffer=60,
+            minimum_matching_threshold=0.7,
+            minimum_consecutive_frames=1,
         )
         self._tracks: Dict[int, Dict] = {}
         self._player_map: Dict[int, str] = {}  # track_id → player_id (P1-P4)

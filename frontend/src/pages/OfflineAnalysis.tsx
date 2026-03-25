@@ -132,11 +132,16 @@ const OfflineAnalysis: React.FC = () => {
   };
 
   // Court map data synced to current frame
-  const currentBall = trajectory.reduce<TrajectoryPoint | null>((closest, t) =>
+  const isOnCourt = (x: number, y: number) => x >= -2 && x <= 12 && y >= -3 && y <= 23;
+
+  const rawBall = trajectory.reduce<TrajectoryPoint | null>((closest, t) =>
     !closest || Math.abs(t.frame - currentFrame) < Math.abs(closest.frame - currentFrame) ? t : closest, null);
 
+  // Clamp ball to court bounds — hide if way off court
+  const currentBall = rawBall && isOnCourt(rawBall.x, rawBall.y) ? rawBall : null;
+
   const ballTrail = trajectory
-    .filter(t => t.frame >= currentFrame - 20 && t.frame <= currentFrame)
+    .filter(t => t.frame >= currentFrame - 20 && t.frame <= currentFrame && isOnCourt(t.x, t.y))
     .map(t => ({ x: t.x, y: t.y }));
 
   const currentPositions = positions.reduce<FramePositions | null>((closest, p) =>
