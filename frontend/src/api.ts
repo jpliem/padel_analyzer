@@ -43,10 +43,10 @@ export async function calibrate(id: string, corners: number[][]): Promise<void> 
   });
 }
 
-export async function uploadVideo(matchId: string, file: File): Promise<{ job_id: string }> {
+export async function uploadVideo(matchId: string, file: File, detectorType: string = 'tracknet'): Promise<{ job_id: string }> {
   const form = new FormData();
   form.append('file', file);
-  return fetchJSON(`${API}/analyze/upload?match_id=${matchId}`, {
+  return fetchJSON(`${API}/analyze/upload?match_id=${matchId}&detector_type=${detectorType}`, {
     method: 'POST',
     body: form,
   });
