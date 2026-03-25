@@ -18,16 +18,39 @@ class CourtCalibration:
         self.inverse_homography: Optional[np.ndarray] = None
         self.corners_pixels: Optional[np.ndarray] = None
 
-    def calibrate(self, corners_pixels: np.ndarray) -> None:
+    def calibrate(self, corners_pixels: np.ndarray,
+                  net_pixels: Optional[np.ndarray] = None) -> None:
+        """Calibrate court homography from pixel points.
+
+        Args:
+            corners_pixels: 4 court corner points in pixel coords
+                [near-left, near-right, far-right, far-left]
+            net_pixels: Optional 2 net post points in pixel coords
+                [net-left, net-right] — adds accuracy constraints at y=10m
+        """
         if len(corners_pixels) != 4:
             raise ValueError("Exactly 4 corner points required")
         self.corners_pixels = corners_pixels.astype(np.float32)
-        court_corners = np.array([
+
+        # Map pixel points to known court coordinates
+        src_points = list(corners_pixels.astype(np.float32))
+        dst_points = [
             [0, 0], [COURT_WIDTH, 0],
             [COURT_WIDTH, COURT_LENGTH], [0, COURT_LENGTH],
-        ], dtype=np.float32)
-        self.homography, _ = cv2.findHomography(corners_pixels, court_corners)
-        self.inverse_homography, _ = cv2.findHomography(court_corners, corners_pixels)
+        ]
+
+        # Add net posts as extra constraints (both at y=10m)
+        if net_pixels is not None and len(net_pixels) == 2:
+            src_points.append(net_pixels[0].astype(np.float32))
+            src_points.append(net_pixels[1].astype(np.float32))
+            dst_points.append([0, NET_Y])
+            dst_points.append([COURT_WIDTH, NET_Y])
+
+        src = np.array(src_points, dtype=np.float32)
+        dst = np.array(dst_points, dtype=np.float32)
+
+        self.homography, _ = cv2.findHomography(src, dst)
+        self.inverse_homography, _ = cv2.findHomography(dst, src)
 
     def _check_calibrated(self):
         if self.homography is None:

@@ -35,11 +35,11 @@ export async function getMatch(id: string): Promise<MatchData> {
   return fetchJSON(`${API}/match/${id}`);
 }
 
-export async function calibrate(id: string, corners: number[][]): Promise<void> {
+export async function calibrate(id: string, corners: number[][], netPoints?: number[][] | null): Promise<void> {
   await fetchJSON(`${API}/match/${id}/calibrate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ corners }),
+    body: JSON.stringify({ corners, net_points: netPoints || null }),
   });
 }
 

@@ -48,7 +48,7 @@ const Calibration: React.FC = () => {
     setSaving(true);
     setError(null);
     try {
-      await calibrate(id, corners);
+      await calibrate(id, corners, netPoints.length === 2 ? netPoints : null);
       if (videoFile) {
         await uploadVideo(id, videoFile);
       }

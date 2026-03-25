@@ -36,6 +36,7 @@ class MatchSetupRequest(BaseModel):
 
 class CalibrationRequest(BaseModel):
     corners: List[List[float]]
+    net_points: Optional[List[List[float]]] = None
 
 
 def _match_dir(match_id: str) -> str:
@@ -114,11 +115,13 @@ def calibrate_court(match_id: str, req: CalibrationRequest):
     import numpy as np
     from cv.court_calibration import CourtCalibration
     cal = CourtCalibration()
-    cal.calibrate(np.array(req.corners, dtype=np.float32))
+    net = np.array(req.net_points, dtype=np.float32) if req.net_points else None
+    cal.calibrate(np.array(req.corners, dtype=np.float32), net_pixels=net)
     match_data = _load_match(match_id)
     match_data["calibration"] = cal.to_dict()
     match_data["calibration_points"] = {
         "corners": req.corners,
+        "net_points": req.net_points,
     }
     _save_match(match_id, match_data)
     return {"status": "calibrated", "match_id": match_id}
