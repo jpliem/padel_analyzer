@@ -9,3 +9,4 @@ data/
 *.mp4
 *.mov
 .superpowers/
+.worktrees/
