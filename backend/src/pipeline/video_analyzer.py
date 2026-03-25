@@ -7,6 +7,7 @@ from models.config import EventDetectorConfig
 from models.types import MatchEvent, MatchConfig, ServerInfo, TeamId
 from cv.detectors.yolo import UnifiedYoloDetector, YoloBallDetector, YoloPlayerDetector
 from cv.detectors.tracknet import TrackNetBallDetector
+from cv.detectors.fast_ball import FastBallDetector
 from cv.ball_tracker import BallTracker
 from cv.player_tracker import PlayerTracker
 from cv.court_detector import CourtDetector
@@ -37,13 +38,16 @@ class VideoAnalyzer:
         unified = UnifiedYoloDetector()
         self.player_detector = YoloPlayerDetector(unified)
 
-        # Ball detector: YOLO or TrackNet
+        # Ball detector: YOLO, TrackNet, or Fast (frame differencing)
         if detector_type == "tracknet":
             yolo_fallback = YoloBallDetector(unified)
             self.ball_detector = TrackNetBallDetector(
                 model_path=tracknet_model_path,
                 yolo_fallback=yolo_fallback,
             )
+        elif detector_type == "fast":
+            yolo_fallback = YoloBallDetector(unified)
+            self.ball_detector = FastBallDetector(yolo_fallback=yolo_fallback)
         else:
             self.ball_detector = YoloBallDetector(unified)
 

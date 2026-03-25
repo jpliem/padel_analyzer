@@ -561,7 +561,9 @@ def start_live(req: LiveStartRequest):
     cal = _load_calibration(match_data)
 
     config = EventDetectorConfig()
-    analyzer = VideoAnalyzer(match_id=req.match_id, calibration=cal, config=config)
+    # Use YOLO for live mode (faster than TrackNet, skip frames compensates)
+    analyzer = VideoAnalyzer(match_id=req.match_id, calibration=cal, config=config,
+                             detector_type="yolo")
     _active_analyzers[req.match_id] = analyzer
 
     device = req.rtsp_url if req.rtsp_url else req.device_id

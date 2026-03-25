@@ -58,9 +58,14 @@ class LiveManager:
             retry_count = 0
 
             t0 = time.monotonic()
-            result = self._analyzer.process_frame(frame, self._frame_no)
-            self._latest_result = result
             self._frame_no += 1
+
+            # Skip frames for speed — only run full pipeline every Nth frame
+            # Always encode JPEG for streaming, but skip heavy CV on some frames
+            skip_interval = 3  # process every 3rd frame
+            if self._frame_no % skip_interval == 0:
+                result = self._analyzer.process_frame(frame, self._frame_no)
+                self._latest_result = result
 
             _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
             self._latest_jpeg = jpeg.tobytes()
