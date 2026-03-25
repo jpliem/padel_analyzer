@@ -37,12 +37,12 @@ class BallTracker:
             cx = (bbox[0] + bbox[2]) / 2.0
             cy = (bbox[1] + bbox[3]) / 2.0
             bbox_size = max(bbox[2] - bbox[0], bbox[3] - bbox[1])
-            # Estimate ball height from bbox size first
-            z = self._estimate_z(bbox_size, 0, 0)  # rough Z from appearance
 
-            # Use 3D height-aware projection if CameraModel is available
-            if hasattr(self.calibration, 'project_to_height') and z > 0.3:
-                # Ball is in the air — project to its estimated height
+            # Estimate ball height using camera model (preferred) or bbox size (fallback)
+            z = self._estimate_z_from_camera(cx, cy) if hasattr(self.calibration, 'project_to_ground') and hasattr(self.calibration, 'court_to_pixel') else self._estimate_z(bbox_size, 0, 0)
+
+            # Project to court coordinates
+            if hasattr(self.calibration, 'project_to_height') and z > 0.2:
                 court_x, court_y = self.calibration.project_to_height(cx, cy, z)
             elif hasattr(self.calibration, 'project_to_ground'):
                 court_x, court_y = self.calibration.project_to_ground(cx, cy)
@@ -79,6 +79,53 @@ class BallTracker:
                    "timestamp": timestamp, "frame": frame_number, "detected": False}
             self.trajectory.append(pos)
             return pos
+
+    def _estimate_z_from_camera(self, px: float, py: float) -> float:
+        """Estimate ball height using pixel-space vertical movement and camera model.
+
+        Uses the ball's pixel velocity to determine if it's rising or falling,
+        combined with the camera's pixels-per-meter at the ball's depth to
+        convert pixel displacement to real-world height.
+
+        The key insight: when the ball is on the ground, its pixel Y position
+        changes smoothly with court Y. When it's airborne, it deviates from
+        the expected ground-level trajectory.
+        """
+        try:
+            if not hasattr(self, '_prev_pixel_y'):
+                self._prev_pixel_y = py
+                self._pixel_z_accumulator = 0.0
+                return 0.0
+
+            # Pixel vertical velocity (negative = moving up in image = ball rising)
+            pixel_vy = py - self._prev_pixel_y
+            self._prev_pixel_y = py
+
+            # Estimate pixels-per-meter at current depth
+            ground_x, ground_y = self.calibration.project_to_ground(px, py)
+            try:
+                ground_px, ground_py = self.calibration.court_to_pixel(ground_x, ground_y, 0.0)
+                elevated_px, elevated_py = self.calibration.court_to_pixel(ground_x, ground_y, 1.0)
+                ppm = abs(ground_py - elevated_py)
+            except Exception:
+                ppm = 50.0  # rough fallback
+
+            if ppm < 1:
+                ppm = 50.0
+
+            # Accumulate height: pixel_vy < 0 means ball going up (gaining height)
+            # Damped accumulator with gravity decay
+            height_change = -pixel_vy / ppm  # convert pixel movement to meters
+            self._pixel_z_accumulator += height_change
+
+            # Apply gravity-like decay — ball always tends toward ground
+            self._pixel_z_accumulator *= 0.95  # decay factor
+
+            # Clamp to reasonable range
+            z = max(0.0, min(self._pixel_z_accumulator, 5.0))
+            return round(z, 2)
+        except Exception:
+            return 0.0
 
     def _estimate_z(self, bbox_size: float, court_x: float, court_y: float) -> float:
         # Update ground ball size to track minimum detected size
