@@ -115,17 +115,21 @@ const BallMesh: React.FC<{ position: [number, number, number] }> = ({ position }
   );
 };
 
-const Court3DView: React.FC<Props> = ({ players = [], ballPosition, ballTrail = [] }) => (
+const Court3DView: React.FC<Props> = ({ players = [], ballPosition, ballTrail = [] }) => {
+  // Deduplicate players by ID — only keep the first occurrence
+  const uniquePlayers = players.filter((p, i, arr) => arr.findIndex(x => x.id === p.id) === i);
+
+  return (
   <div style={{ width: '100%', height: '100%', background: '#0a1628' }}>
-    <Canvas camera={{ position: [0, 12, 15], fov: 50 }}>
-      <ambientLight intensity={0.4} />
+    <Canvas camera={{ position: [0, 18, 14], fov: 45 }}>
+      <ambientLight intensity={0.5} />
       <directionalLight position={[10, 20, 10]} intensity={0.6} />
       <directionalLight position={[-10, 15, -10]} intensity={0.3} />
 
       <CourtSurface />
 
-      {/* Players */}
-      {players.map(p => (
+      {/* Players — max 4 */}
+      {uniquePlayers.slice(0, 4).map(p => (
         <PlayerFigure
           key={p.id}
           position={[CX(p.x), 0, CZ(p.y)]}
@@ -173,6 +177,7 @@ const Court3DView: React.FC<Props> = ({ players = [], ballPosition, ballTrail = 
       />
     </Canvas>
   </div>
-);
+  );
+};
 
 export default Court3DView;
