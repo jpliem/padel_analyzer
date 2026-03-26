@@ -42,6 +42,20 @@ class CalibrationRequest(BaseModel):
     image_height: Optional[int] = 720
 
 
+class AddCameraRequest(BaseModel):
+    camera_id: str
+    label: str = ""
+    source_type: str = "file"  # "file" or "rtsp"
+    source_path: str = ""
+
+
+class CourtModelOverrideRequest(BaseModel):
+    back_wall_height: Optional[float] = None
+    side_glass_height: Optional[float] = None
+    side_glass_depth: Optional[float] = None
+    side_fence_height: Optional[float] = None
+
+
 def _match_dir(match_id: str) -> str:
     return os.path.join(DATA_DIR, match_id)
 
@@ -119,6 +133,8 @@ def create_match(req: MatchSetupRequest):
         "golden_point": req.golden_point,
         "format": req.format,
         "calibration": None,
+        "cameras": [],
+        "court_model_overrides": None,
     }
     _save_match(match_id, data)
     return {"match_id": match_id, "status": "created"}
@@ -127,6 +143,75 @@ def create_match(req: MatchSetupRequest):
 @app.get("/match/{match_id}")
 def get_match(match_id: str):
     return _load_match(match_id)
+
+
+@app.post("/match/{match_id}/cameras")
+def add_camera(match_id: str, req: AddCameraRequest):
+    match_data = _load_match(match_id)
+    camera_entry = {
+        "camera_id": req.camera_id,
+        "label": req.label,
+        "source_type": req.source_type,
+        "source_path": req.source_path,
+    }
+    cameras = match_data.get("cameras", [])
+    cameras.append(camera_entry)
+    match_data["cameras"] = cameras
+    _save_match(match_id, match_data)
+    return {"camera_id": req.camera_id, "status": "added"}
+
+
+@app.post("/match/{match_id}/cameras/{cam_id}/calibrate")
+def calibrate_camera(match_id: str, cam_id: str, req: CalibrationRequest):
+    import numpy as np
+    from cv.court_calibration import CourtCalibration
+    from cv.camera_model import CameraModel
+
+    match_data = _load_match(match_id)
+    cameras = match_data.get("cameras", [])
+    camera = next((c for c in cameras if c["camera_id"] == cam_id), None)
+    if camera is None:
+        raise HTTPException(status_code=404, detail=f"Camera '{cam_id}' not found in match")
+
+    n_points = len(req.corners)
+    if n_points < 4:
+        raise HTTPException(status_code=400, detail=f"Need at least 4 keypoints, got {n_points}")
+
+    cal = CourtCalibration()
+    if n_points >= 12:
+        cal.calibrate_keypoints(req.corners)
+    else:
+        net = np.array(req.net_points, dtype=np.float32) if req.net_points else None
+        cal.calibrate(np.array(req.corners, dtype=np.float32), net_pixels=net)
+
+    cam = CameraModel()
+    cam.calibrate(
+        keypoints_2d=req.corners,
+        net_top_2d=req.net_top_points,
+        image_width=req.image_width or 1280,
+        image_height=req.image_height or 720,
+    )
+
+    mode = "3d" if cam.has_3d() else ("12-keypoint" if n_points >= 12 else "4-corner")
+
+    camera["calibration"] = cal.to_dict()
+    camera["camera_model"] = cam.to_dict()
+    camera["calibration_points"] = {
+        "corners": req.corners,
+        "net_points": req.net_points,
+        "net_top_points": req.net_top_points,
+        "mode": mode,
+    }
+    _save_match(match_id, match_data)
+    return {"status": "calibrated", "camera_id": cam_id}
+
+
+@app.post("/match/{match_id}/court-model")
+def set_court_model_overrides(match_id: str, req: CourtModelOverrideRequest):
+    match_data = _load_match(match_id)
+    match_data["court_model_overrides"] = req.model_dump(exclude_none=False)
+    _save_match(match_id, match_data)
+    return {"status": "updated"}
 
 
 @app.post("/match/{match_id}/calibrate")
@@ -196,7 +281,7 @@ def delete_match(match_id: str):
     return {"status": "deleted", "match_id": match_id}
 
 
-# ── Calibration Templates ──────────────────────────────────────────────
+# -- Calibration Templates --
 
 TEMPLATES_DIR = "data/templates"
 
