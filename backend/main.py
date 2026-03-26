@@ -243,6 +243,8 @@ def calibrate_court(match_id: str, req: CalibrationRequest):
 
     mode = "3d" if cam.has_3d() else ("12-keypoint" if n_points >= 12 else "4-corner")
 
+    reproj_error = cam.compute_reprojection_error(req.corners)
+
     match_data = _load_match(match_id)
     match_data["calibration"] = cal.to_dict()
     match_data["camera_model"] = cam.to_dict()
@@ -252,8 +254,10 @@ def calibrate_court(match_id: str, req: CalibrationRequest):
         "net_top_points": req.net_top_points,
         "mode": mode,
     }
+    match_data["reprojection_error"] = reproj_error
     _save_match(match_id, match_data)
-    return {"status": "calibrated", "match_id": match_id, "mode": mode}
+    return {"status": "calibrated", "match_id": match_id, "mode": mode,
+            "reprojection_error": reproj_error}
 
 
 @app.delete("/match/{match_id}/analysis")
@@ -494,6 +498,7 @@ def start_match_analysis(match_id: str, background_tasks: BackgroundTasks,
                     "trajectory": analyzer.ball_tracker.trajectory,
                     "player_positions": analyzer.player_positions_log,
                     "frames_processed": result.get("frames_processed", 0),
+                    "fps": result.get("fps", 30.0),
                 }, f)
         except Exception as e:
             _analysis_jobs[match_id]["state"] = "error"
@@ -678,6 +683,7 @@ def start_analysis(job_id: str, background_tasks: BackgroundTasks):
                     "trajectory": analyzer.ball_tracker.trajectory,
                     "player_positions": analyzer.player_positions_log,
                     "frames_processed": result.get("frames_processed", 0),
+                    "fps": result.get("fps", 30.0),
                 }, f)
         except Exception as e:
             _analysis_jobs[job_id]["state"] = "error"
@@ -691,7 +697,12 @@ def start_analysis(job_id: str, background_tasks: BackgroundTasks):
 def get_analysis_status(job_id: str):
     if job_id not in _analysis_jobs:
         raise HTTPException(status_code=404, detail="Job not found")
-    return _analysis_jobs[job_id]
+    job = _analysis_jobs[job_id]
+    if job.get("state") == "complete":
+        results = _load_results(job["match_id"])
+        if results:
+            job["fps"] = results.get("fps", 30.0)
+    return job
 
 
 class LiveStartRequest(BaseModel):

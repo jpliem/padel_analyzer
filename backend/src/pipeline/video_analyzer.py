@@ -145,12 +145,18 @@ class VideoAnalyzer:
         self.all_events.extend(events)
 
         # Log player positions per frame (lightweight: just court coords)
+        valid_players = [
+            p for p in player_pos
+            if not (p["x"] == 0 and p["y"] == 0)
+            and -5 <= p["x"] <= 15 and -5 <= p["y"] <= 25
+        ][:4]
+
         self.player_positions_log.append({
             "frame": frame_no,
             "players": [
                 {"track_id": p["track_id"], "x": p["x"], "y": p["y"],
                  "player_id": self.player_tracker.get_player_id(p["track_id"])}
-                for p in player_pos
+                for p in valid_players
             ],
         })
 
@@ -204,6 +210,7 @@ class VideoAnalyzer:
             "frames_processed": frame_no,
             "events": len(self.all_events),
             "final_score": self.scoring_engine.get_score_display(),
+            "fps": fps,
         }
 
     def _draw_overlays(self, frame: np.ndarray, result: FrameResult) -> np.ndarray:
