@@ -470,6 +470,16 @@ def start_match_analysis(match_id: str, background_tasks: BackgroundTasks,
             _analysis_jobs[match_id]["state"] = "complete"
             _analysis_jobs[match_id]["percent"] = 100
             results_file = os.path.join(_match_dir(match_id), "results.json")
+            wall_hits = [
+                {
+                    "event_type": e.event_type.value,
+                    "frame_number": e.frame_number,
+                    "timestamp": e.timestamp,
+                    "metadata": e.metadata,
+                }
+                for e in analyzer.all_events
+                if e.event_type.value == "WALL_HIT"
+            ]
             with open(results_file, "w") as f:
                 json.dump({
                     "score": analyzer.scoring_engine.get_score_display(),
@@ -480,6 +490,7 @@ def start_match_analysis(match_id: str, background_tasks: BackgroundTasks,
                          "metadata": e.metadata}
                         for e in analyzer.all_events
                     ],
+                    "wall_hits": wall_hits,
                     "trajectory": analyzer.ball_tracker.trajectory,
                     "player_positions": analyzer.player_positions_log,
                     "frames_processed": result.get("frames_processed", 0),
@@ -640,6 +651,16 @@ def start_analysis(job_id: str, background_tasks: BackgroundTasks):
             _analysis_jobs[job_id]["percent"] = 100
             # Save results to disk so they persist across server restarts
             results_file = os.path.join(_match_dir(match_id), "results.json")
+            wall_hits = [
+                {
+                    "event_type": e.event_type.value,
+                    "frame_number": e.frame_number,
+                    "timestamp": e.timestamp,
+                    "metadata": e.metadata,
+                }
+                for e in analyzer.all_events
+                if e.event_type.value == "WALL_HIT"
+            ]
             with open(results_file, "w") as f:
                 json.dump({
                     "score": analyzer.scoring_engine.get_score_display(),
@@ -653,6 +674,7 @@ def start_analysis(job_id: str, background_tasks: BackgroundTasks):
                         }
                         for e in analyzer.all_events
                     ],
+                    "wall_hits": wall_hits,
                     "trajectory": analyzer.ball_tracker.trajectory,
                     "player_positions": analyzer.player_positions_log,
                     "frames_processed": result.get("frames_processed", 0),
