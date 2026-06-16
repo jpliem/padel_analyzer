@@ -119,13 +119,19 @@ class CameraModel:
                 )
 
     def project_to_ground(self, px: float, py: float) -> Tuple[float, float]:
-        """Project pixel to ground plane (Z=0). Best for player feet."""
-        if self.rvec is not None:
-            return self._ray_plane_intersect(px, py, z_plane=0.0)
-        elif self.homography is not None:
+        """Project pixel to ground plane (Z=0). Best for player feet and ball bounces.
+
+        Prefer the directly-fitted ground homography: it maps the ground plane
+        exactly, whereas the PnP pose (decomposed with an estimated focal length)
+        carries reprojection error. Use the PnP ray-plane intersect only when no
+        homography is available.
+        """
+        if self.homography is not None:
             point = np.array([[[px, py]]], dtype=np.float32)
             result = cv2.perspectiveTransform(point, self.homography)
             return float(result[0][0][0]), float(result[0][0][1])
+        if self.rvec is not None:
+            return self._ray_plane_intersect(px, py, z_plane=0.0)
         raise RuntimeError("Camera not calibrated")
 
     def project_to_height(self, px: float, py: float, height: float) -> Tuple[float, float]:
