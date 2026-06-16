@@ -154,6 +154,18 @@ class CameraModel:
             return float(result[0][0][0]), float(result[0][0][1])
         raise RuntimeError("Camera not calibrated")
 
+    def projection_matrix(self) -> Optional[np.ndarray]:
+        """Return the 3x4 camera projection matrix P = K [R | t].
+
+        Maps a homogeneous 3D world point to homogeneous pixels. Required for
+        multi-camera triangulation. None if the 3D pose was not solved.
+        """
+        if self.rvec is None or self.camera_matrix is None:
+            return None
+        R, _ = cv2.Rodrigues(self.rvec)
+        Rt = np.hstack([R, self.tvec.reshape(3, 1)])
+        return self.camera_matrix @ Rt
+
     def _ray_plane_intersect(self, px: float, py: float, z_plane: float) -> Tuple[float, float]:
         """Cast a ray from pixel through camera and intersect with Z=z_plane."""
         # Get rotation matrix
