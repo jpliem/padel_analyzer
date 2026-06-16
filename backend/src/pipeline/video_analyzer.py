@@ -164,10 +164,13 @@ class VideoAnalyzer:
 
     def analyze_video(self, video_path: str,
                       progress_callback: Optional[Callable] = None,
-                      annotated_path: Optional[str] = None) -> Dict:
+                      annotated_path: Optional[str] = None,
+                      max_frames: Optional[int] = None) -> Dict:
         cap = cv2.VideoCapture(video_path)
         fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        if max_frames is not None and max_frames > 0:
+            total_frames = min(total_frames, max_frames) if total_frames > 0 else max_frames
         w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         self.ball_tracker.fps = fps
@@ -175,13 +178,23 @@ class VideoAnalyzer:
 
         writer = None
         if annotated_path:
-            fourcc = cv2.VideoWriter_fourcc(*'avc1')
-            writer = cv2.VideoWriter(annotated_path, fourcc, fps, (w, h))
+            # Try H.264 (avc1) first; many opencv-python builds (esp. macOS) lack
+            # the H.264 encoder and open() fails silently, producing a 0-byte file.
+            # Fall back to mp4v, which ships with every opencv build.
+            for codec in ("avc1", "mp4v"):
+                fourcc = cv2.VideoWriter_fourcc(*codec)
+                writer = cv2.VideoWriter(annotated_path, fourcc, fps, (w, h))
+                if writer.isOpened():
+                    break
+                writer.release()
+                writer = None
 
         frame_no = 0
         while cap.isOpened():
             ret, frame = cap.read()
             if not ret:
+                break
+            if max_frames is not None and frame_no >= max_frames:
                 break
             result = self.process_frame(frame, frame_no)
 

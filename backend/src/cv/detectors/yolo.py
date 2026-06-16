@@ -64,7 +64,7 @@ class YoloPlayerDetector(PlayerDetector):
     CLS_PERSON = 0
 
     def __init__(self, unified: UnifiedYoloDetector,
-                 conf_threshold: float = 0.6, max_detections: int = 4):
+                 conf_threshold: float = 0.4, max_detections: int = 4):
         self._unified = unified
         self._conf_threshold = conf_threshold
         self._max_detections = max_detections

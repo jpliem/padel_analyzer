@@ -60,7 +60,8 @@ class EventDetector:
                 if serve_result is not None:
                     self.state_machine.on_serve_result(serve_result["valid"])
                     if serve_result.get("fault"):
-                        events.append(self._make_event(EventType.FAULT, frame_no, ball_pos))
+                        events.append(self._make_event(EventType.FAULT, frame_no, ball_pos,
+                                                       {"detail": serve_result.get("detail")}))
 
                     if self.state_machine.state == MatchState.POINT_ENDED:
                         self._resolve_point_end(PointReason.DOUBLE_FAULT, None, last_hitter_track_id=None)
