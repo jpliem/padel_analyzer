@@ -86,6 +86,9 @@ def main() -> int:
     ap.add_argument("--start", type=float, default=30.0, help="match time start (s)")
     ap.add_argument("--window", type=float, default=60.0, help="seconds to process")
     ap.add_argument("--rate", type=float, default=10.0, help="samples/sec")
+    ap.add_argument("--max-reproj", type=float, default=20.0,
+                    help="reject triangulations with reproj error above this (px); "
+                    "high error = cameras disagree (mismatched ball / sync slip)")
     ap.add_argument("--out")
     args = ap.parse_args()
 
@@ -115,7 +118,7 @@ def main() -> int:
     det_a, det_b = make_ball_detector(), make_ball_detector()
 
     n = int(args.window * args.rate)
-    pts, both_seen, on_court, reproj = [], 0, 0, []
+    pts, both_seen, on_court, reproj, rejected = [], 0, 0, [], 0
     for i in range(n):
         t = args.start + i / args.rate
         capa.set(cv2.CAP_PROP_POS_FRAMES, int(t * fps_a))
@@ -134,6 +137,12 @@ def main() -> int:
             continue
         x, y, z = float(X[0]), float(X[1]), float(X[2])
         err = max(reprojection_errors(X, [(Pa, pa), (Pb, pb)]))
+        # Reject views that disagree: high reprojection error means the two
+        # cameras locked onto different things (or a sub-frame sync slip on a
+        # fast ball) — the crossed rays give a nonsense 3D point.
+        if err > args.max_reproj:
+            rejected += 1
+            continue
         reproj.append(err)
         onc = (-1 <= x <= 11) and (-1 <= y <= 21) and (-0.5 <= z <= 8)
         if onc:
@@ -148,7 +157,8 @@ def main() -> int:
 
     zs = [p["z"] for p in pts if p["on_court"]]
     print("\n=== real two-camera ball triangulation ===")
-    print(f"  samples: {n}, ball seen in BOTH: {both_seen}, triangulated: {len(pts)}")
+    print(f"  samples: {n}, ball seen in BOTH: {both_seen}, "
+          f"rejected (reproj>{args.max_reproj}px): {rejected}, kept: {len(pts)}")
     if pts:
         print(f"  on-court & plausible: {on_court}/{len(pts)} ({100*on_court/len(pts):.0f}%)")
         print(f"  median reproj error: {np.median(reproj):.1f}px "
