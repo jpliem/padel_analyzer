@@ -62,16 +62,35 @@ def build_camera(video, calib_path, auto_court):
 def make_ball_detector():
     from cv.detectors.yolo import UnifiedYoloDetector, YoloBallDetector
     from cv.detectors.tracknet import TrackNetBallDetector
-    return TrackNetBallDetector(model_path="models/tracknet_padel.pt",
-                                conf_threshold=0.3,
-                                yolo_fallback=YoloBallDetector(UnifiedYoloDetector()))
+    unified = UnifiedYoloDetector()
+    det = TrackNetBallDetector(model_path="models/tracknet_padel.pt",
+                               conf_threshold=0.3,
+                               yolo_fallback=YoloBallDetector(unified))
+    from cv.detectors.yolo import YoloPlayerDetector
+    return det, YoloPlayerDetector(unified)
 
 
-def ball_pixel(detector, frame, fno):
+def _in_player_head(cx, cy, player_boxes, head_frac=0.35):
+    """True if (cx,cy) sits in the upper `head_frac` of any player bbox.
+
+    The bald-spot/head false positive lives at the top of a player box; the
+    real ball at contact is lower (racket/body height), so this rejects heads
+    without killing most real ball detections.
+    """
+    for x1, y1, x2, y2 in player_boxes:
+        if x1 <= cx <= x2 and y1 <= cy <= y1 + head_frac * (y2 - y1):
+            return True
+    return False
+
+
+def ball_pixel(detector, frame, fno, player_boxes=()):
     bbox = detector.detect(frame, fno)
     if not bbox or len(bbox) < 4:
         return None
-    return ((bbox[0] + bbox[2]) / 2.0, (bbox[1] + bbox[3]) / 2.0)
+    cx, cy = (bbox[0] + bbox[2]) / 2.0, (bbox[1] + bbox[3]) / 2.0
+    if _in_player_head(cx, cy, player_boxes):
+        return None  # rejected: looks like a player's head, not the ball
+    return (cx, cy)
 
 
 def main() -> int:
@@ -115,7 +134,8 @@ def main() -> int:
     print(f"sync offset {offset:+.3f}s | fps A {fps_a} B {fps_b}")
 
     capa, capb = cv2.VideoCapture(va), cv2.VideoCapture(vb)
-    det_a, det_b = make_ball_detector(), make_ball_detector()
+    det_a, players_a = make_ball_detector()
+    det_b, players_b = make_ball_detector()
 
     n = int(args.window * args.rate)
     pts, both_seen, on_court, reproj, rejected = [], 0, 0, [], 0
@@ -127,8 +147,12 @@ def main() -> int:
         okb, fb = capb.read()
         if not (oka and okb):
             break
-        pa = ball_pixel(det_a, fa, i)
-        pb = ball_pixel(det_b, fb, i)
+        boxes_a = players_a.detect(fa, i)
+        boxes_b = players_b.detect(fb, i)
+        ba = boxes_a[:, :4].tolist() if len(boxes_a) else []
+        bb = boxes_b[:, :4].tolist() if len(boxes_b) else []
+        pa = ball_pixel(det_a, fa, i, ba)
+        pb = ball_pixel(det_b, fb, i, bb)
         if pa is None or pb is None:
             continue
         both_seen += 1
