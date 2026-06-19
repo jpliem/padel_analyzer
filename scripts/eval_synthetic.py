@@ -58,21 +58,24 @@ def load_gt(csv_path: str) -> list[tuple[float, float] | None]:
     return gt
 
 
-def build_detector(detector_type: str):
+def build_detector(detector_type: str, tracknet_model_path: str = "models/tracknet_padel.pt",
+                   tracknet_conf: float = 0.3, yolo_fallback: bool = True):
     """Construct a ball detector with the same wiring VideoAnalyzer uses."""
     from cv.detectors.yolo import UnifiedYoloDetector, YoloBallDetector
     from cv.detectors.tracknet import TrackNetBallDetector
     from cv.detectors.fast_ball import FastBallDetector
 
     unified = UnifiedYoloDetector()
+    yolo = YoloBallDetector(unified)
     if detector_type == "tracknet":
         return TrackNetBallDetector(
-            model_path="models/tracknet_padel.pt",
-            yolo_fallback=YoloBallDetector(unified),
+            model_path=tracknet_model_path,
+            conf_threshold=tracknet_conf,
+            yolo_fallback=yolo if yolo_fallback else None,
         )
     if detector_type == "fast":
-        return FastBallDetector(yolo_fallback=YoloBallDetector(unified))
-    return YoloBallDetector(unified)
+        return FastBallDetector(yolo_fallback=yolo)
+    return yolo
 
 
 def bbox_center(bbox) -> tuple[float, float] | None:
@@ -89,6 +92,11 @@ def main() -> int:
     parser.add_argument("--csv", required=True, help="Paired ground-truth CSV")
     parser.add_argument("--detector", choices=["yolo", "tracknet", "fast"],
                         default="yolo")
+    parser.add_argument("--tracknet-model", default="models/tracknet_padel.pt",
+                        help="TrackNet weights, relative to backend/ unless absolute")
+    parser.add_argument("--tracknet-conf", type=float, default=0.3)
+    parser.add_argument("--no-yolo-fallback", action="store_true",
+                        help="Disable YOLO fallback for TrackNet early/low-confidence frames")
     parser.add_argument("--max-frames", type=int, default=None)
     parser.add_argument("--out", help="Write full per-frame + summary JSON here")
     args = parser.parse_args()
@@ -110,7 +118,12 @@ def main() -> int:
         print(f"WARN: clip frames ({n_frames}) != GT rows ({len(gt)}); "
               f"comparing on the overlap by index.", file=sys.stderr)
 
-    detector = build_detector(args.detector)
+    detector = build_detector(
+        args.detector,
+        tracknet_model_path=args.tracknet_model,
+        tracknet_conf=args.tracknet_conf,
+        yolo_fallback=not args.no_yolo_fallback,
+    )
 
     errors: list[float] = []          # pixel error on frames where GT and detection both exist
     n_gt = 0                          # frames with a GT ball
@@ -161,6 +174,8 @@ def main() -> int:
     summary = {
         "clip": os.path.basename(clip),
         "detector": args.detector,
+        "tracknet_model": args.tracknet_model if args.detector == "tracknet" else None,
+        "tracknet_conf": args.tracknet_conf if args.detector == "tracknet" else None,
         "frames_evaluated": frame_no,
         "gt_frames": n_gt,
         "detection_rate": round(n_detected_when_gt / n_gt, 4) if n_gt else None,

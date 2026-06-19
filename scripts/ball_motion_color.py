@@ -15,11 +15,14 @@ import cv2, numpy as np
 ROOT = "/Users/jonathan/Documents/Github/padel_analyzer"
 
 
-def ball_candidates(prev, cur, nxt, lo, hi, amin, amax, motion_thr=18):
+def ball_candidates(prev, cur, nxt, lo, hi, amin, amax, motion_thr=18,
+                    min_circularity=0.35, min_fill_ratio=0.30,
+                    max_aspect_ratio=2.2, min_radius=2.5,
+                    max_radius=18.0, return_metrics=False):
     # motion: pixels that changed between frames (moving object)
     d1 = cv2.absdiff(cv2.cvtColor(cur, cv2.COLOR_BGR2GRAY), cv2.cvtColor(prev, cv2.COLOR_BGR2GRAY))
     d2 = cv2.absdiff(cv2.cvtColor(nxt, cv2.COLOR_BGR2GRAY), cv2.cvtColor(cur, cv2.COLOR_BGR2GRAY))
-    motion = cv2.threshold(cv2.min(d1, d2), motion_thr, 255, cv2.THRESH_BINARY)[1]
+    motion = cv2.threshold(cv2.max(d1, d2), motion_thr, 255, cv2.THRESH_BINARY)[1]
     # colour: ball-coloured
     hsv = cv2.cvtColor(cur, cv2.COLOR_BGR2HSV)
     color = cv2.inRange(hsv, np.array(lo), np.array(hi))
@@ -33,7 +36,32 @@ def ball_candidates(prev, cur, nxt, lo, hi, amin, amax, motion_thr=18):
         (x, y), r = cv2.minEnclosingCircle(c)
         if r <= 0 or a > amax:
             continue
-        out.append((float(x), float(y), float(r)))
+        if r < min_radius or r > max_radius:
+            continue
+        circle_area = np.pi * r * r
+        fill_ratio = float(a / circle_area) if circle_area > 0 else 0.0
+        perimeter = cv2.arcLength(c, True)
+        circularity = float(4.0 * np.pi * a / (perimeter * perimeter)) if perimeter > 0 else 0.0
+        bx, by, bw, bh = cv2.boundingRect(c)
+        aspect_ratio = float(max(bw, bh) / max(min(bw, bh), 1))
+        if circularity < min_circularity:
+            continue
+        if fill_ratio < min_fill_ratio:
+            continue
+        if aspect_ratio > max_aspect_ratio:
+            continue
+        if return_metrics:
+            out.append({
+                "x": float(x),
+                "y": float(y),
+                "r": float(r),
+                "area": float(a),
+                "circularity": circularity,
+                "fill_ratio": fill_ratio,
+                "aspect_ratio": aspect_ratio,
+            })
+        else:
+            out.append((float(x), float(y), float(r)))
     return out
 
 
@@ -52,6 +80,11 @@ def main():
     ap.add_argument("--hsv-hi", default="48,255,255")
     ap.add_argument("--amin", type=float, default=2.0)
     ap.add_argument("--amax", type=float, default=400.0)
+    ap.add_argument("--min-circularity", type=float, default=0.35)
+    ap.add_argument("--min-fill-ratio", type=float, default=0.30)
+    ap.add_argument("--max-aspect-ratio", type=float, default=2.2)
+    ap.add_argument("--min-radius", type=float, default=2.5)
+    ap.add_argument("--max-radius", type=float, default=18.0)
     args = ap.parse_args()
     lo = [int(v) for v in args.hsv_lo.split(",")]; hi = [int(v) for v in args.hsv_hi.split(",")]
     for name, video, fps in [("panasonic", f"{ROOT}/data/datasets/padelvic/cameras/panasonic_final.mp4", 50.0),
@@ -60,7 +93,12 @@ def main():
         p, c, n = read3(cap, int(args.t * fps)); cap.release()
         if c is None:
             print(f"{name}: no frame"); continue
-        cand = ball_candidates(p, c, n, lo, hi, args.amin, args.amax)
+        cand = ball_candidates(p, c, n, lo, hi, args.amin, args.amax,
+                               min_circularity=args.min_circularity,
+                               min_fill_ratio=args.min_fill_ratio,
+                               max_aspect_ratio=args.max_aspect_ratio,
+                               min_radius=args.min_radius,
+                               max_radius=args.max_radius)
         for x, y, r in cand:
             cv2.circle(c, (int(x), int(y)), max(int(r) + 8, 14), (0, 0, 255), 3)
         cv2.putText(c, f"{name} t={args.t}s  {len(cand)} moving+ball-colour candidates",

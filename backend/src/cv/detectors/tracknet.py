@@ -83,6 +83,86 @@ class TrackNetV2Model(nn.Module):
         return x
 
 
+class LegacyConvBlock(nn.Module):
+    def __init__(self, in_dim, out_dim):
+        super().__init__()
+        self.block = nn.Sequential(
+            nn.Conv2d(in_dim, out_dim, kernel_size=3, padding=1, bias=True),
+            nn.ReLU(),
+            nn.BatchNorm2d(out_dim),
+        )
+
+    def forward(self, x):
+        return self.block(x)
+
+
+class LegacyTrackNetModel(nn.Module):
+    """Older 3-frame TrackNet architecture used by `tracknet_tennis.pt`."""
+
+    def __init__(self):
+        super().__init__()
+        self.conv1 = LegacyConvBlock(9, 64)
+        self.conv2 = LegacyConvBlock(64, 64)
+        self.conv3 = LegacyConvBlock(64, 128)
+        self.conv4 = LegacyConvBlock(128, 128)
+        self.conv5 = LegacyConvBlock(128, 256)
+        self.conv6 = LegacyConvBlock(256, 256)
+        self.conv7 = LegacyConvBlock(256, 256)
+        self.conv8 = LegacyConvBlock(256, 512)
+        self.conv9 = LegacyConvBlock(512, 512)
+        self.conv10 = LegacyConvBlock(512, 512)
+        self.conv11 = LegacyConvBlock(512, 256)
+        self.conv12 = LegacyConvBlock(256, 256)
+        self.conv13 = LegacyConvBlock(256, 256)
+        self.conv14 = LegacyConvBlock(256, 128)
+        self.conv15 = LegacyConvBlock(128, 128)
+        self.conv16 = LegacyConvBlock(128, 64)
+        self.conv17 = LegacyConvBlock(64, 64)
+        self.conv18 = LegacyConvBlock(64, 256)
+        self.pool = nn.MaxPool2d((2, 2), stride=(2, 2))
+        self.up = nn.Upsample(scale_factor=2, mode="nearest")
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.conv2(x)
+        x = self.pool(x)
+        x = self.conv3(x)
+        x = self.conv4(x)
+        x = self.pool(x)
+        x = self.conv5(x)
+        x = self.conv6(x)
+        x = self.conv7(x)
+        x = self.pool(x)
+        x = self.conv8(x)
+        x = self.conv9(x)
+        x = self.conv10(x)
+        x = self.up(x)
+        x = self.conv11(x)
+        x = self.conv12(x)
+        x = self.conv13(x)
+        x = self.up(x)
+        x = self.conv14(x)
+        x = self.conv15(x)
+        x = self.up(x)
+        x = self.conv16(x)
+        x = self.conv17(x)
+        return self.conv18(x)
+
+
+def _state_dict_from_checkpoint(checkpoint):
+    if isinstance(checkpoint, dict) and "model" in checkpoint:
+        return checkpoint["model"]
+    return checkpoint
+
+
+def build_tracknet_model_from_state_dict(state_dict):
+    if "down_block_1.conv_1.conv.weight" in state_dict:
+        return TrackNetV2Model(in_dim=27, out_dim=8), 9
+    if "conv1.block.0.weight" in state_dict:
+        return LegacyTrackNetModel(), 3
+    raise ValueError("Unsupported TrackNet checkpoint architecture")
+
+
 class TrackNetBallDetector(BallDetector):
     """Ball detector using padel-trained TrackNet with 9-frame temporal input."""
 
@@ -97,13 +177,12 @@ class TrackNetBallDetector(BallDetector):
 
         if model is not None:
             self._model = model
+            self.N_INPUT_FRAMES = getattr(model, "n_input_frames", self.N_INPUT_FRAMES)
         elif model_path is not None:
-            self._model = TrackNetV2Model(in_dim=27, out_dim=8)
             checkpoint = torch.load(model_path, map_location=self._torch_device, weights_only=False)
-            if isinstance(checkpoint, dict) and 'model' in checkpoint:
-                self._model.load_state_dict(checkpoint['model'])
-            else:
-                self._model.load_state_dict(checkpoint)
+            state_dict = _state_dict_from_checkpoint(checkpoint)
+            self._model, self.N_INPUT_FRAMES = build_tracknet_model_from_state_dict(state_dict)
+            self._model.load_state_dict(state_dict)
         else:
             raise ValueError("Either model or model_path must be provided")
 
@@ -153,16 +232,23 @@ class TrackNetBallDetector(BallDetector):
             r = r.astype(np.float32) / 255.0
             resized.append(r)
 
-        # Stack 9 frames → 27 channels
+        # Stack temporal RGB frames into channels.
         stacked = np.concatenate(resized, axis=2)  # (288, 512, 27)
         tensor = torch.from_numpy(stacked).permute(2, 0, 1).unsqueeze(0)  # (1, 27, 288, 512)
         tensor = tensor.to(self._torch_device)
 
         with torch.no_grad():
-            output = self._model(tensor)  # (1, 8, 288, 512)
+            output = self._model(tensor)
 
-        # Use last channel (most recent frame's heatmap)
-        return output[0, -1].cpu().numpy()  # (288, 512)
+        # New padel weights output sequence heatmaps; legacy tennis weights
+        # output a 256-channel response volume. Reduce both to one heatmap.
+        if output.shape[1] == 1:
+            heatmap = output[0, 0]
+        elif output.shape[1] <= self.N_INPUT_FRAMES:
+            heatmap = output[0, -1]
+        else:
+            heatmap = output[0].amax(dim=0)
+        return heatmap.cpu().numpy()
 
     @staticmethod
     def _find_peak(heatmap: np.ndarray):

@@ -34,6 +34,27 @@ class TestTrackNetV2Model:
         assert out.shape == (2, 8, 288, 512)
 
 
+class TestLegacyTrackNetModel:
+    def test_forward_pass_shape(self):
+        from cv.detectors.tracknet import LegacyTrackNetModel
+        model = LegacyTrackNetModel()
+        model.eval()
+        x = torch.randn(1, 9, 288, 512)
+        with torch.no_grad():
+            out = model(x)
+        assert out.shape == (1, 256, 288, 512)
+
+    def test_loader_selects_legacy_architecture_for_conv1_weights(self):
+        from cv.detectors.tracknet import build_tracknet_model_from_state_dict, LegacyTrackNetModel
+        state = {
+            "conv1.block.0.weight": torch.zeros(64, 9, 3, 3),
+            "conv18.block.0.weight": torch.zeros(256, 64, 3, 3),
+        }
+        model, input_frames = build_tracknet_model_from_state_dict(state)
+        assert isinstance(model, LegacyTrackNetModel)
+        assert input_frames == 3
+
+
 class TestTrackNetBallDetector:
     def _make_detector_with_mock_model(self, peak_conf=0.9, peak_x=256, peak_y=144):
         from cv.detectors.tracknet import TrackNetBallDetector, TrackNetV2Model

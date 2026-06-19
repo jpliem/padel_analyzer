@@ -10,3 +10,6 @@ data/
 *.mov
 .superpowers/
 .worktrees/
+
+# Downloaded datasets (large, do not commit)
+data/datasets/
