@@ -163,12 +163,20 @@ Full pipeline assembled: court model with 3D wall geometry, wall-collision detec
 - Deep-EIoU / harmonic-mean association to replace ByteTrack-style matching (keeps all tracklets — padel is a closed 4-player world).
 - TrackNetV4 motion-attention layer retrofit; blur-aware ball labels.
 
+### 2026-07-19 (later) — Salvage + consolidation
+- Ported the abandoned March `feature/accuracy-fixes` branch fresh onto master: **reprojection-error calibration quality** (shown in the UI at click time: good <10px / warn <20px / poor), NaN/impossible-position guards on the ball trajectory, player-position log filtering. Branch + worktree deleted.
+- Repo consolidated to a single `master` branch; README + architecture diagram refreshed.
+- Full session detail: `docs/changelog-2026-07-19-research-auditor-reid.md`.
+
 ### Next up (as of 2026-07-19)
-1. Download PadelTracker100 → convert → retrain ball model → must beat the 63.5% gate.
+1. Download PadelTracker100 (paused; resumable) → convert → retrain ball model → must beat the 63.5% gate.
 2. Re-run full match analysis with new ball model + OSNet re-ID; measure scoring accuracy movement.
+3. Run `scripts/eval_players.py` to quantify the OSNet re-ID gain and tune thresholds.
+4. Delete stale remote branches (manual): `git push origin --delete feat/eval-harnesses-3d-z feature/accuracy-fixes main phase2-cv-pipeline phase3-frontend-rebuild tracknetv2-integration`.
 
 ## Docs
 
+- `docs/changelog-2026-07-19-research-auditor-reid.md` — SOTA research findings, VLM auditor redesign (judgment → pointing), OSNet re-ID, accuracy-fixes port, next actions.
 - `docs/changelog-2026-07-18-production-hardening.md` — hardening session: bugs found/fixed, measured baselines, verification runs, remaining gaps.
 - `docs/multicam-3d-progress.md` — why the architecture is single-camera physics fitting (multi-camera triangulation is the validation harness, not the product).
 - `CLAUDE.md` — full module map and repo conventions.
