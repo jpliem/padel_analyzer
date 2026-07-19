@@ -11,6 +11,8 @@ interface Props {
 const statusBadge: Record<string, string> = {
   created: 'badge-created',
   calibrated: 'badge-calibrated',
+  uploaded: 'badge-calibrated',
+  processing: 'badge-processing',
   analyzed: 'badge-analyzed',
   live: 'badge-live',
 };
@@ -19,7 +21,7 @@ const MatchCard: React.FC<Props> = ({ match, onDeleted }) => {
   const navigate = useNavigate();
 
   const handleClick = () => {
-    if (match.status === 'analyzed') {
+    if (match.status === 'analyzed' || match.status === 'processing') {
       navigate(`/match/${match.match_id}/analyze`);
     } else if (match.status === 'calibrated') {
       return;
@@ -69,12 +71,13 @@ const MatchCard: React.FC<Props> = ({ match, onDeleted }) => {
         <div>
           <div style={{ fontSize: 16, fontWeight: 600 }}>{match.match_name}</div>
           <div style={{ fontSize: 12, color: '#888', marginTop: 4 }}>{match.match_id}</div>
+          {match.media && <div style={{ fontSize: 11, color: '#999', marginTop: 7 }}>{match.media.original_name} · {Math.floor(match.media.duration_seconds / 60)}:{String(Math.floor(match.media.duration_seconds % 60)).padStart(2, '0')}</div>}
         </div>
         <span className={`badge ${statusBadge[match.status] || 'badge-created'}`}>
           {match.status}
         </span>
       </div>
-      {match.status === 'calibrated' && (
+      {(match.status === 'calibrated' || match.status === 'uploaded') && (
         <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
           <button className="btn btn-primary" style={{ fontSize: 12 }}
             onClick={e => { e.stopPropagation(); navigate(`/match/${match.match_id}/analyze`); }}>

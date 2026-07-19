@@ -64,6 +64,7 @@ class MatchConfig:
     golden_point: bool = True
     format: MatchFormat = MatchFormat.BEST_OF_3
     first_server: ServerInfo = field(default_factory=ServerInfo)
+    out_of_court_play_enabled: bool = False
 
 
 @dataclass

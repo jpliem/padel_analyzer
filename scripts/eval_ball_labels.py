@@ -1,12 +1,12 @@
 #!/usr/bin/env python
 """Evaluate 2D ball detectors against hand-labeled real PADELVIC frames.
 
-Label JSON schema:
+Label JSON schema (v1):
 {
   "video": "data/datasets/padelvic/cameras/panasonic_final.mp4",
   "labels": [
-    {"frame": 225, "t": 4.5, "ball": {"visible": true, "x": 123.0, "y": 456.0}},
-    {"frame": 226, "t": 4.52, "ball": {"visible": false}}
+    {"frame": 225, "state": "visible", "center": [123.0, 456.0]},
+    {"frame": 226, "state": "occluded", "center": null}
   ]
 }
 
@@ -29,8 +29,14 @@ import cv2  # noqa: E402
 
 
 def label_visible(label):
+    if "state" in label:
+        return label.get("state") in ("visible", "blurred") and label.get("center") is not None
     ball = label.get("ball") or {}
     return bool(ball.get("visible")) and ball.get("x") is not None and ball.get("y") is not None
+
+
+def label_reviewed(label):
+    return label.get("state", "legacy") not in ("unreviewed", "uncertain")
 
 
 def match_prediction(label, prediction, threshold_px=15.0):
@@ -45,7 +51,10 @@ def match_prediction(label, prediction, threshold_px=15.0):
             "error_px": None,
         }
 
-    truth = (float(label["ball"]["x"]), float(label["ball"]["y"]))
+    if "center" in label:
+        truth = tuple(float(v) for v in label["center"])
+    else:
+        truth = (float(label["ball"]["x"]), float(label["ball"]["y"]))
     if prediction is None:
         return {
             "frame": label.get("frame"),
@@ -70,8 +79,14 @@ def match_prediction(label, prediction, threshold_px=15.0):
 
 
 def compute_metrics(labels, predictions, threshold_px=15.0):
+    labels = [label for label in labels if label_reviewed(label)]
     rows = [
-        match_prediction(label, predictions.get(int(label["frame"])), threshold_px)
+        match_prediction(
+            label,
+            predictions.get(prediction_key(label),
+                            predictions.get(int(label["frame"]))),
+            threshold_px,
+        )
         for label in labels
     ]
     visible_rows = [r for r in rows if r["visible"]]
@@ -168,29 +183,68 @@ def color_motion_prediction(cap, frame_no, hsv_lo, hsv_hi):
     return (float(best["x"]), float(best["y"]))
 
 
+def tracknet_prediction(cap, detector, frame_no):
+    """Evaluate TrackNet with actual consecutive frames ending at frame_no."""
+    window_size = int(detector.N_INPUT_FRAMES)
+    start_frame = frame_no - window_size + 1
+    if start_frame < 0:
+        return None
+    detector.reset()
+    cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+    prediction = None
+    for current_frame in range(start_frame, frame_no + 1):
+        ok, frame = cap.read()
+        if not ok:
+            return None
+        prediction = detector.detect(frame, current_frame)
+    return bbox_center(prediction)
+
+
+def label_video(labels_doc, label):
+    """Resolve the source video for a label (multi-source v1 or legacy doc)."""
+    video = label.get("source_video") or labels_doc.get("video")
+    if not video:
+        raise KeyError("label has no source_video and document has no video")
+    return video if os.path.isabs(video) else os.path.join(_ROOT, video)
+
+
+def prediction_key(label):
+    return (label.get("source_video") or "", int(label["frame"]))
+
+
 def run_detector(labels_doc, detector_type, hsv_lo, hsv_hi,
                  tracknet_model_path="models/tracknet_padel.pt",
                  tracknet_conf=0.3, yolo_fallback=True):
-    video = labels_doc["video"]
-    video_path = video if os.path.isabs(video) else os.path.join(_ROOT, video)
-    cap = cv2.VideoCapture(video_path)
     detector = build_detector(detector_type, tracknet_model_path,
                               tracknet_conf, yolo_fallback)
     predictions = {}
+    captures = {}
 
-    for idx, label in enumerate(labels_doc["labels"]):
-        frame_no = int(label["frame"])
-        if detector_type == "color_motion":
-            pred = color_motion_prediction(cap, frame_no, hsv_lo, hsv_hi)
-        else:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
-            ok, frame = cap.read()
-            pred = bbox_center(detector.detect(frame, frame_no)) if ok else None
-        predictions[frame_no] = pred
-        if (idx + 1) % 25 == 0:
-            print(f"\r  evaluated {idx + 1}/{len(labels_doc['labels'])}", end="", file=sys.stderr)
-    print(file=sys.stderr)
-    cap.release()
+    try:
+        for idx, label in enumerate(labels_doc["labels"]):
+            frame_no = int(label["frame"])
+            video_path = label_video(labels_doc, label)
+            cap = captures.get(video_path)
+            if cap is None:
+                cap = cv2.VideoCapture(video_path)
+                if not cap.isOpened():
+                    raise SystemExit(f"cannot open video: {video_path}")
+                captures[video_path] = cap
+            if detector_type == "color_motion":
+                pred = color_motion_prediction(cap, frame_no, hsv_lo, hsv_hi)
+            elif detector_type == "tracknet":
+                pred = tracknet_prediction(cap, detector, frame_no)
+            else:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
+                ok, frame = cap.read()
+                pred = bbox_center(detector.detect(frame, frame_no)) if ok else None
+            predictions[prediction_key(label)] = pred
+            if (idx + 1) % 25 == 0:
+                print(f"\r  evaluated {idx + 1}/{len(labels_doc['labels'])}", end="", file=sys.stderr)
+        print(file=sys.stderr)
+    finally:
+        for cap in captures.values():
+            cap.release()
     return predictions
 
 
@@ -205,11 +259,32 @@ def main():
     ap.add_argument("--threshold-px", type=float, default=15.0)
     ap.add_argument("--hsv-lo", default="22,50,110")
     ap.add_argument("--hsv-hi", default="48,255,255")
+    ap.add_argument(
+        "--sequence-id", action="append",
+        help="evaluate only the selected sequence/rally (repeatable)",
+    )
+    ap.add_argument("--split", choices=["train", "val", "test"],
+                    help="evaluate only labels in the selected split")
     ap.add_argument("--out")
     args = ap.parse_args()
 
     labels_path = args.labels if os.path.isabs(args.labels) else os.path.join(_ROOT, args.labels)
     labels_doc = json.load(open(labels_path))
+    if args.split:
+        labels_doc["labels"] = [
+            label for label in labels_doc["labels"]
+            if label.get("split") == args.split
+        ]
+        if not labels_doc["labels"]:
+            raise SystemExit("no labels matched --split")
+    if args.sequence_id:
+        selected = set(args.sequence_id)
+        labels_doc["labels"] = [
+            label for label in labels_doc["labels"]
+            if label.get("sequence_id") in selected
+        ]
+        if not labels_doc["labels"]:
+            raise SystemExit("no labels matched --sequence-id")
     hsv_lo = [int(v) for v in args.hsv_lo.split(",")]
     hsv_hi = [int(v) for v in args.hsv_hi.split(",")]
 
@@ -229,6 +304,11 @@ def main():
     summary["tracknet_model"] = args.tracknet_model if args.detector == "tracknet" else None
     summary["tracknet_conf"] = args.tracknet_conf if args.detector == "tracknet" else None
     summary["fps"] = round(len(labels_doc["labels"]) / max(time.time() - t0, 1e-9), 2)
+    summary["split"] = args.split
+    summary["sequence_ids"] = sorted({
+        label.get("sequence_id") for label in labels_doc["labels"]
+        if label.get("sequence_id")
+    })
 
     print("\n=== real ball-label detector accuracy ===")
     for key, value in summary.items():

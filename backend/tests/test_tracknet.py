@@ -128,3 +128,15 @@ class TestTrackNetBallDetector:
     def test_device_property(self):
         detector = self._make_detector_with_mock_model()
         assert detector.device == "cpu"
+
+    def test_exposes_multiple_local_peaks_for_active_ball_selection(self):
+        detector = self._make_detector_with_mock_model(peak_conf=0.9, peak_x=100, peak_y=100)
+        output = detector._model.return_value
+        output[0, -1, 197:204, 397:404] = 0.8
+        frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+        for i in range(8):
+            detector.detect_candidates(frame, i)
+        candidates = detector.detect_candidates(frame, 8)
+        assert len(candidates) == 2
+        assert candidates[0]["confidence"] > candidates[1]["confidence"]
+        assert all(item["source"] == "tracknet" for item in candidates)

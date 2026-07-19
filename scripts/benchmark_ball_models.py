@@ -1,9 +1,9 @@
 #!/usr/bin/env python
-"""Benchmark ready-to-use ball detector models on PADELVIC synthetic GT.
+"""Benchmark ready-to-use ball detectors on reviewed real ball labels.
 
-This is a thin runner around `eval_synthetic.py` that compares the local
-ready weights in `backend/models/` using the same clip, frame limit, and output
-schema.
+This is a thin runner around `eval_ball_labels.py`. PadelVic synthetic CSVs are
+Xsens positional data, not verified ball centers, and are intentionally not
+accepted here.
 """
 import argparse
 import json
@@ -18,10 +18,8 @@ def run_eval(name, args, out_dir):
     out = os.path.join(out_dir, f"{name}.json")
     cmd = [
         sys.executable,
-        os.path.join(ROOT, "scripts", "eval_synthetic.py"),
-        "--clip", args.clip,
-        "--csv", args.csv,
-        "--max-frames", str(args.max_frames),
+        os.path.join(ROOT, "scripts", "eval_ball_labels.py"),
+        "--labels", args.labels,
         "--out", out,
     ]
     if name == "yolo":
@@ -42,9 +40,7 @@ def run_eval(name, args, out_dir):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--clip", default="data/datasets/padelvic/synthetic/001-1250-17462.mkv")
-    ap.add_argument("--csv", default="data/datasets/padelvic/synthetic/001-1250-17462.csv")
-    ap.add_argument("--max-frames", type=int, default=100)
+    ap.add_argument("--labels", required=True, help="Reviewed v1 labels.json")
     ap.add_argument("--tracknet-conf", type=float, default=0.3)
     ap.add_argument("--out-dir", default="/tmp/ball_model_benchmark")
     ap.add_argument("--models", default="yolo,fast,tracknet_padel,tracknet_tennis,tracknetv2")

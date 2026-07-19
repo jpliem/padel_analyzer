@@ -1,10 +1,11 @@
 #!/usr/bin/env python
-"""Accuracy harness — measure ball-detection error against PADELVIC synthetic ground truth.
+"""Legacy point-target harness for synthetic PadelVic CSV files.
 
-PADELVIC synthetic clips ship with a paired CSV of true ball pixel positions
-(one row per clip frame). This runs a ball detector over every frame, compares
-the detected pixel center to the ground-truth pixel, and reports detection rate
-plus pixel-error statistics.
+Important: PadelVic describes these clips as Xsens motion-capture renders and
+does not identify the CSV coordinates as ball centers. Inspection shows that
+they align with the player's ground/root position. The command therefore
+refuses known PadelVic CSV files by default so they cannot produce bogus ball
+accuracy numbers. Use `eval_ball_labels.py` with reviewed ball labels instead.
 
 CSV format (semicolon-separated, no header):  orig_frame ; ball_px_x ; ball_px_y
 The clip is subsampled so CSV row i corresponds 1:1 to clip frame i.
@@ -65,14 +66,17 @@ def build_detector(detector_type: str, tracknet_model_path: str = "models/trackn
     from cv.detectors.tracknet import TrackNetBallDetector
     from cv.detectors.fast_ball import FastBallDetector
 
-    unified = UnifiedYoloDetector()
-    yolo = YoloBallDetector(unified)
     if detector_type == "tracknet":
+        yolo = (YoloBallDetector(UnifiedYoloDetector()) if yolo_fallback else None)
         return TrackNetBallDetector(
             model_path=tracknet_model_path,
             conf_threshold=tracknet_conf,
-            yolo_fallback=yolo if yolo_fallback else None,
+            yolo_fallback=yolo,
         )
+    if detector_type == "fast" and not yolo_fallback:
+        return FastBallDetector(yolo_fallback=None)
+    unified = UnifiedYoloDetector()
+    yolo = YoloBallDetector(unified)
     if detector_type == "fast":
         return FastBallDetector(yolo_fallback=yolo)
     return yolo
@@ -99,12 +103,24 @@ def main() -> int:
                         help="Disable YOLO fallback for TrackNet early/low-confidence frames")
     parser.add_argument("--max-frames", type=int, default=None)
     parser.add_argument("--out", help="Write full per-frame + summary JSON here")
+    parser.add_argument("--force-unverified-gt", action="store_true",
+                        help="Run despite unverified target semantics (diagnostics only)")
     args = parser.parse_args()
 
     for p in (args.clip, args.csv):
         if not os.path.exists(p):
             print(f"ERROR: not found: {p}", file=sys.stderr)
             return 1
+
+    normalised_csv = args.csv.replace("\\", "/").lower()
+    if ("padelvic/synthetic/" in normalised_csv and
+            not args.force_unverified_gt):
+        print(
+            "ERROR: PadelVic synthetic CSV coordinates are Xsens positional "
+            "ground truth, not verified ball centers. Use reviewed labels.json "
+            "with scripts/eval_ball_labels.py. Pass --force-unverified-gt only "
+            "for target-agnostic diagnostics.", file=sys.stderr)
+        return 2
 
     # Detector/model paths in the code are relative to backend/.
     os.chdir(os.path.join(_ROOT, "backend"))

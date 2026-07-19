@@ -1,6 +1,7 @@
 import numpy as np
 import supervision as sv
 from typing import List, Dict, Optional
+from cv.player_reid import PlayerAppearanceEncoder, PlayerReIdentifier
 
 
 class PlayerTracker:
@@ -22,8 +23,19 @@ class PlayerTracker:
         )
         self._tracks: Dict[int, Dict] = {}
         self._player_map: Dict[int, str] = {}  # track_id → player_id (P1-P4)
+        try:
+            from cv.player_reid import OsnetAppearanceEncoder
+            self._appearance_encoder = OsnetAppearanceEncoder()
+            # ReID-embedding cosine similarities sit lower than HSV histogram
+            # overlaps; matched pairs typically score 0.55-0.8.
+            self._reid = PlayerReIdentifier(similarity_threshold=0.60,
+                                            margin_threshold=0.06)
+        except Exception:
+            self._appearance_encoder = PlayerAppearanceEncoder()
+            self._reid = PlayerReIdentifier()
 
-    def update(self, detections: np.ndarray, frame_number: int) -> List[Dict]:
+    def update(self, detections: np.ndarray, frame_number: int,
+               frame: Optional[np.ndarray] = None) -> List[Dict]:
         """Update tracker with YOLO detections.
 
         Args:
@@ -83,6 +95,23 @@ class PlayerTracker:
                 "x": float(court_x), "y": float(court_y),
                 "bbox": [float(x1), float(y1), float(x2), float(y2)],
             })
+
+        if frame is not None:
+            active_ids = {self._player_map[p["track_id"]] for p in positions
+                          if p["track_id"] in self._player_map}
+            for position in positions:
+                track_id = position["track_id"]
+                embedding = self._appearance_encoder.encode(frame, position["bbox"])
+                if embedding is None:
+                    continue
+                player_id = self._player_map.get(track_id)
+                if player_id is not None:
+                    self._reid.register(player_id, embedding)
+                    continue
+                match = self._reid.match(embedding, excluded_players=active_ids)
+                if match.confident and match.player_id is not None:
+                    self._player_map[track_id] = match.player_id
+                    active_ids.add(match.player_id)
 
         return positions
 

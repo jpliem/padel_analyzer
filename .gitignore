@@ -1,11 +1,13 @@
 node_modules/
 venv/
+.venv/
 __pycache__/
 *.pyc
 .env
 *.pt
 frontend/build/
 data/
+vlm_coach/data/
 *.mp4
 *.mov
 .superpowers/
@@ -13,3 +15,6 @@ data/
 
 # Downloaded datasets (large, do not commit)
 data/datasets/
+*.pth
+.DS_Store
+annotated_outputs/

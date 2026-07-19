@@ -1,295 +1,311 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { useParams } from 'react-router-dom';
-import { Panel, Group, Separator } from 'react-resizable-panels';
-import { startMatchAnalysis, getAnalysisStatus, getScore, getEvents, getTrajectory, getAnnotatedVideoUrl, getPositions, uploadVideo, startAnalysis, deleteAnalysis } from '../api';
-import Scoreboard from '../components/Scoreboard';
-import EventLog from '../components/EventLog';
-import CourtMiniMap from '../components/CourtMiniMap';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import {
+  cancelAnalysis, correctScore, deleteAnalysis, getAnalysisStatus, getAnnotatedVideoUrl, getExportUrl,
+  getHighlightClipUrl, getMatchResult, getRecordingVideoUrl, resolveReview, startMatchAnalysis, uploadVideo,
+} from '../api';
 import Court3DView from '../components/Court3DView';
-import type { ScoreData, EventData, TrajectoryPoint } from '../types';
+import CourtMiniMap from '../components/CourtMiniMap';
+import EventLog from '../components/EventLog';
+import ReviewQueue from '../components/ReviewQueue';
+import Scoreboard from '../components/Scoreboard';
+import type { AnalysisResult, EventData, Highlight, MatchData, ReviewRecord } from '../types';
 
-interface FramePositions {
-  frame: number;
-  players: { track_id: number; x: number; y: number; player_id: string | null }[];
-}
+type ViewState = 'loading' | 'needs_upload' | 'uploading' | 'processing' | 'complete' | 'error';
+
+const formatTime = (seconds: number) => {
+  const whole = Math.max(0, Math.floor(seconds));
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`;
+};
 
 const OfflineAnalysis: React.FC = () => {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const videoRef = useRef<HTMLVideoElement>(null);
-  const [status, setStatus] = useState<string>('loading');
-  const [percent, setPercent] = useState(0);
-  const [error, setError] = useState<string | null>(null);
-  const [score, setScore] = useState<ScoreData | null>(null);
-  const [events, setEvents] = useState<EventData[]>([]);
-  const [trajectory, setTrajectory] = useState<TrajectoryPoint[]>([]);
-  const [positions, setPositions] = useState<FramePositions[]>([]);
-  const [currentFrame, setCurrentFrame] = useState(0);
-  const [fps] = useState(24);
-  const [view3D, setView3D] = useState(false);
-  const animRef = useRef<number>();
   const pollRef = useRef<ReturnType<typeof setInterval>>();
+  const [state, setState] = useState<ViewState>('loading');
+  const [percent, setPercent] = useState(0);
+  const [error, setError] = useState('');
+  const [match, setMatch] = useState<MatchData | null>(null);
+  const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
+  const [videoMode, setVideoMode] = useState<'annotated' | 'original'>('annotated');
+  const [panel, setPanel] = useState<'highlights' | 'events' | 'court'>('highlights');
+  const [courtView, setCourtView] = useState<'2d' | '3d'>('2d');
+  const [currentFrame, setCurrentFrame] = useState(0);
 
-  const loadResults = useCallback(async () => {
-    if (!id) return;
-    const [sd, ed, td, pd] = await Promise.all([
-      getScore(id), getEvents(id), getTrajectory(id), getPositions(id),
-    ]);
-    setScore(sd);
-    setEvents(ed.events);
-    setTrajectory(td.trajectory);
-    setPositions(pd.positions);
-    setStatus('complete');
+  const load = useCallback(async () => {
+    if (!id) return null;
+    const result = await getMatchResult(id);
+    setMatch(result.match);
+    setPercent(result.job.percent || 0);
+    if (result.analysis) {
+      setAnalysis(result.analysis);
+      setState('complete');
+    } else if (result.job.state === 'processing') {
+      setState('processing');
+    } else if (result.job.state === 'error') {
+      setState('error');
+      setError(result.job.error || 'Analysis failed.');
+    } else if (result.match.media) {
+      setState('loading');
+    } else {
+      setState('needs_upload');
+    }
+    return result;
   }, [id]);
 
-  const startPolling = useCallback(() => {
-    if (!id) return;
+  const poll = useCallback(() => {
+    if (!id || pollRef.current) return;
     pollRef.current = setInterval(async () => {
       try {
-        const s = await getAnalysisStatus(id);
-        setPercent(s.percent);
-        if (s.state === 'complete') {
+        const status = await getAnalysisStatus(id);
+        setPercent(status.percent || 0);
+        if (status.state === 'complete') {
           clearInterval(pollRef.current);
-          await loadResults();
-        } else if (s.state === 'error') {
+          pollRef.current = undefined;
+          await load();
+        } else if (status.state === 'cancelled') {
           clearInterval(pollRef.current);
-          setStatus('error');
-          setError(s.error || 'Analysis failed');
+          pollRef.current = undefined;
+          setState('error');
+          setError('Analysis cancelled. You can retry whenever you are ready.');
+        } else if (status.state === 'error') {
+          clearInterval(pollRef.current);
+          pollRef.current = undefined;
+          setState('error');
+          setError(status.error || 'Analysis failed.');
         }
-      } catch {
-        clearInterval(pollRef.current);
+      } catch (err: any) {
+        setError(err.message);
       }
     }, 1000);
-  }, [id, loadResults]);
+  }, [id, load]);
 
-  // On mount: check for results → if none, auto-start analysis
   useEffect(() => {
-    if (!id) return;
-
     (async () => {
       try {
-        // Check if results already exist
-        const [, e, t] = await Promise.all([
-          getScore(id), getEvents(id), getTrajectory(id),
-        ]);
-        if (e.events.length > 0 || t.trajectory.length > 0) {
-          await loadResults();
-          return;
+        const result = await load();
+        if (!result || result.analysis) return;
+        if (result.job.state === 'processing') {
+          poll();
+        } else if (result.match.media && result.match.calibration) {
+          await startMatchAnalysis(result.match.match_id);
+          setState('processing');
+          poll();
         }
-      } catch {}
-
-      // No results — try to start analysis (video should be uploaded from calibration)
-      try {
-        await startMatchAnalysis(id);
-        setStatus('processing');
-        startPolling();
       } catch (err: any) {
-        // No video on server — show upload button
-        setStatus('needs_upload');
+        setState('error');
+        setError(err.message);
       }
     })();
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, [load, poll]);
 
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-      if (animRef.current) cancelAnimationFrame(animRef.current);
-    };
-  }, [id, loadResults, startPolling]);
-
-  // Manual upload (fallback if video wasn't uploaded during calibration)
-  const handleManualUpload = async (file: File) => {
+  const upload = async (file: File) => {
     if (!id) return;
-    setStatus('uploading');
-    setError(null);
     try {
+      setState('uploading');
       await uploadVideo(id, file);
-      await startMatchAnalysis(id);
-      setStatus('processing');
-      startPolling();
+      navigate(`/match/${id}/calibrate`);
     } catch (err: any) {
-      setStatus('error');
+      setState('error');
       setError(err.message);
     }
   };
 
-  // Sync video time to frame number
-  const syncVideoTime = useCallback(() => {
-    if (videoRef.current && status === 'complete') {
-      const frame = Math.floor(videoRef.current.currentTime * fps);
-      setCurrentFrame(frame);
-    }
-    animRef.current = requestAnimationFrame(syncVideoTime);
-  }, [status, fps]);
+  const seek = (seconds: number) => {
+    if (!videoRef.current) return;
+    videoRef.current.currentTime = seconds;
+    videoRef.current.play().catch(() => {});
+  };
 
-  useEffect(() => {
-    if (status === 'complete') {
-      animRef.current = requestAnimationFrame(syncVideoTime);
-    }
-    return () => { if (animRef.current) cancelAnimationFrame(animRef.current); };
-  }, [status, syncVideoTime]);
+  const resolve = async (recordId: string, confirmed: boolean, winner?: number) => {
+    if (!id) return;
+    const response = await resolveReview(id, recordId, confirmed, winner);
+    setAnalysis(previous => previous ? {
+      ...previous,
+      score: response.score,
+      reviews: previous.reviews.map(item => item.id === recordId ? response.review : item),
+    } : previous);
+  };
 
-  const seekToEvent = (event: EventData) => {
-    if (videoRef.current) {
-      videoRef.current.currentTime = event.timestamp;
-      videoRef.current.play();
+  const addPoint = async (team: number) => {
+    if (!id) return;
+    const response = await correctScore(id, team);
+    setAnalysis(previous => previous ? { ...previous, score: response.score } : previous);
+    await load();
+  };
+
+  const reanalyze = async () => {
+    if (!id || !window.confirm('Replace this analysis and run the recording again?')) return;
+    await deleteAnalysis(id);
+    setAnalysis(null);
+    setPercent(0);
+    await startMatchAnalysis(id);
+    setState('processing');
+    poll();
+  };
+
+  const retry = async () => {
+    if (!id) return;
+    try {
+      setError('');
+      setPercent(0);
+      await startMatchAnalysis(id);
+      setState('processing');
+      poll();
+    } catch (err: any) {
+      setError(err.message);
     }
   };
 
-  // Court map data synced to current frame
-  const isOnCourt = (x: number, y: number) => x >= -2 && x <= 12 && y >= -3 && y <= 23;
-
-  const rawBall = trajectory.reduce<TrajectoryPoint | null>((closest, t) =>
-    !closest || Math.abs(t.frame - currentFrame) < Math.abs(closest.frame - currentFrame) ? t : closest, null);
-
-  // Clamp ball to court bounds — hide if way off court
-  const currentBall = rawBall && isOnCourt(rawBall.x, rawBall.y) ? rawBall : null;
-
+  const fps = analysis?.media?.fps || match?.media?.fps || 30;
+  const trajectory = analysis?.trajectory || [];
+  const currentBall = trajectory.reduce<any>((closest, point) =>
+    !closest || Math.abs(point.frame - currentFrame) < Math.abs(closest.frame - currentFrame) ? point : closest, null);
   const ballTrail = trajectory
-    .filter(t => t.frame >= currentFrame - 20 && t.frame <= currentFrame && isOnCourt(t.x, t.y))
-    .map(t => ({ x: t.x, y: t.y }));
-
-  const currentPositions = positions.reduce<FramePositions | null>((closest, p) =>
-    !closest || Math.abs(p.frame - currentFrame) < Math.abs(closest.frame - currentFrame) ? p : closest, null);
-
-  const playerDots = (currentPositions?.players || []).map(p => ({
-    id: p.player_id || `#${p.track_id}`,
-    x: p.x,
-    y: p.y,
-    team: (p.player_id === 'P1' || p.player_id === 'P2' ? 'A' : 'B') as 'A' | 'B',
-    label: p.player_id || `#${p.track_id}`,
+    .filter(point => point.frame <= currentFrame && point.frame > currentFrame - 3 * fps)
+    .slice(-40)
+    .map(point => ({ x: point.x, y: point.y, z: point.z || 0 }));
+  const currentPositions = (analysis?.player_positions || []).reduce<any>((closest: any, item: any) =>
+    !closest || Math.abs(item.frame - currentFrame) < Math.abs(closest.frame - currentFrame) ? item : closest, null);
+  const players = (currentPositions?.players || []).map((player: any) => ({
+    id: player.player_id || `#${player.track_id}`, x: player.x, y: player.y,
+    label: player.player_id || `#${player.track_id}`,
+    team: (player.player_id === 'P1' || player.player_id === 'P2' ? 'A' : 'B') as 'A' | 'B',
   }));
 
-  return (
-    <div style={{ height: 'calc(100vh - 56px)', display: 'flex', flexDirection: 'column' }}>
-      {/* Top bar */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '12px 20px', background: 'white', borderBottom: '1px solid #e8e8e8' }}>
-        {status === 'needs_upload' && (
-          <label className="btn btn-primary" style={{ cursor: 'pointer', fontSize: 12 }}>
-            Upload Video
-            <input type="file" accept="video/*" hidden onChange={e => e.target.files?.[0] && handleManualUpload(e.target.files[0])} />
-          </label>
-        )}
-        {status === 'loading' && <span style={{ fontSize: 12, color: '#888' }}>Checking for results...</span>}
-        {status === 'uploading' && <span style={{ fontSize: 12, color: '#888' }}>Uploading video...</span>}
-        {(status === 'processing') && (
-          <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 12, color: '#555', whiteSpace: 'nowrap' }}>Analyzing with TrackNet...</span>
-            <div style={{ flex: 1, height: 6, background: '#e8e8e8', borderRadius: 3, overflow: 'hidden' }}>
-              <div style={{ width: `${percent}%`, height: '100%', background: '#00b894', borderRadius: 3, transition: 'width 0.3s' }} />
-            </div>
-            <span style={{ fontSize: 12, color: '#00b894', fontWeight: 500 }}>{percent.toFixed(0)}%</span>
-          </div>
-        )}
-        {status === 'complete' && (
-          <>
-            <span style={{ fontSize: 12, color: '#00b894', fontWeight: 500, flex: 1 }}>
-              Complete — {trajectory.length} ball points, {events.length} events
-            </span>
-            <button
-              className="btn btn-danger"
-              style={{ fontSize: 11, padding: '4px 12px' }}
-              onClick={async () => {
-                if (!id || !window.confirm('Delete analysis results and re-analyze?')) return;
-                await deleteAnalysis(id);
-                setStatus('loading');
-                setScore(null);
-                setEvents([]);
-                setTrajectory([]);
-                setPositions([]);
-                try {
-                  await startMatchAnalysis(id);
-                  setStatus('processing');
-                  setPercent(0);
-                  startPolling();
-                } catch {
-                  setStatus('needs_upload');
-                }
-              }}
-            >
-              Re-analyze
-            </button>
-          </>
-        )}
-        {error && <span style={{ fontSize: 12, color: '#e17055' }}>{error}</span>}
+  if (state !== 'complete' || !analysis || !id) {
+    return (
+      <div className="analysis-state">
+        <div className="analysis-state-card">
+          <span className="eyebrow">{match?.match_name || 'Smart recording'}</span>
+          {state === 'loading' && <><h1>Preparing your match…</h1><p>Checking the recording and court setup.</p></>}
+          {state === 'uploading' && <><h1>Uploading recording…</h1><p>Keep this page open until the upload finishes.</p></>}
+          {state === 'processing' && <>
+            <h1>Analyzing the match</h1><p>Tracking the active ball, players, rallies and uncertain moments.</p>
+            <div className="progress-track"><span style={{ width: `${percent}%` }} /></div><strong>{percent.toFixed(0)}%</strong>
+            <div className="truth-note">Long recordings can take time. Progress is saved, and completed results survive a server restart.</div>
+            <button className="btn btn-outline" onClick={() => id && cancelAnalysis(id).catch(err => setError(err.message))}>Cancel analysis</button>
+          </>}
+          {state === 'needs_upload' && <>
+            <h1>Add a court recording</h1><p>Use a fixed landscape video with the complete court visible.</p>
+            <label className="btn btn-success file-button">Choose video<input hidden type="file" accept="video/*" onChange={event => event.target.files?.[0] && upload(event.target.files[0])} /></label>
+          </>}
+          {state === 'error' && <><h1>Analysis stopped</h1><p className="form-error">{error}</p><div style={{ display: 'flex', justifyContent: 'center', gap: 8 }}><button className="btn btn-success" onClick={retry}>Retry analysis</button><button className="btn btn-outline" onClick={() => navigate(`/match/${id}/calibrate`)}>Check court setup</button></div></>}
+        </div>
       </div>
+    );
+  }
 
-      {/* Main area */}
-      <Group orientation="horizontal" style={{ flex: 1 }}>
-        <Panel defaultSize={55} minSize={30}>
-          <div style={{ height: '100%', background: '#111', display: 'flex', flexDirection: 'column' }}>
-            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
-              {status === 'complete' && id ? (
-                <video ref={videoRef} src={getAnnotatedVideoUrl(id)} controls muted
-                  style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
-              ) : status === 'processing' ? (
-                <div style={{ textAlign: 'center', color: '#888' }}>
-                  <div style={{ fontSize: 48, marginBottom: 16 }}>🔍</div>
-                  <div style={{ fontSize: 16 }}>Analyzing video...</div>
-                  <div style={{ fontSize: 24, fontWeight: 700, color: '#00b894', marginTop: 8 }}>{percent.toFixed(0)}%</div>
-                </div>
-              ) : status === 'needs_upload' ? (
-                <div style={{ color: '#888', fontSize: 14, textAlign: 'center' }}>
-                  <div style={{ fontSize: 18, marginBottom: 8 }}>No video found</div>
-                  <div>Upload a video using the button above</div>
-                </div>
-              ) : (
-                <div style={{ color: '#555', fontSize: 14 }}>Loading...</div>
-              )}
-            </div>
+  const reviews = analysis.reviews || [];
+  const highlights = analysis.highlights || [];
+  const events = analysis.events || [];
+  const media = analysis.media || match?.media || {
+    original_name: 'Legacy recording', fps: 30, frame_count: 0,
+    duration_seconds: 0, width: 0, height: 0, size_bytes: 0, uploaded_at: '',
+  };
+  const stats = analysis.stats || {
+    rallies: highlights.length, total_events: events.length, hits: 0, bounces: 0,
+    wall_hits: 0, serves: 0, faults: 0, average_rally_seconds: 0,
+    longest_rally_seconds: 0, ball_track_points: trajectory.length,
+    frames_processed: 0, pending_reviews: 0,
+  };
+  const pending = reviews.filter(item => item.status === 'proposed').length;
+  const model = analysis.model_info;
+  const modelEvidence = model?.evidence;
+  const activeBall = analysis.active_ball_diagnostics || {};
+  const evidenceStatus = analysis.evidence_status;
+  return (
+    <div className="review-page">
+      <header className="review-header">
+        <div><button className="text-button" onClick={() => navigate('/')}>← Matches</button><h1>{match?.match_name}</h1><p>{media.original_name} · {formatTime(media.duration_seconds)} · {media.fps.toFixed(1)} fps</p></div>
+        <div className="review-actions">
+          <a className="btn btn-outline" href={getExportUrl(id, 'csv')}>Events CSV</a>
+          <a className="btn btn-outline" href={getExportUrl(id, 'json')}>Full JSON</a>
+          <button className="btn btn-outline" onClick={reanalyze}>Re-analyze</button>
+        </div>
+      </header>
+
+      <div className="accuracy-banner"><strong>Single-camera estimate</strong><span>{analysis.accuracy_notice || 'Older analysis loaded with compatibility defaults. Re-analyze for the newest confidence and highlight fields.'}</span><em>{pending} moment{pending === 1 ? '' : 's'} waiting for review</em></div>
+
+      {model && <section className="model-evidence-panel">
+        <div><strong>Ball model: {model.id}</strong><span>{model.selection_reason || model.status}</span></div>
+        {modelEvidence
+          ? <div><strong>{(modelEvidence.recall * 100).toFixed(1)}% matched</strong><span>{modelEvidence.matched_labels}/{modelEvidence.visible_labels} visible labels on one held-out Panasonic rally, within {modelEvidence.tolerance_px}px. This is not club-wide or scoring accuracy.</span></div>
+          : <div><strong>Not benchmarked</strong><span>This detector has no registered reviewed-label result.</span></div>}
+        <div><strong>{activeBall.rejected_candidates || 0} candidates rejected</strong><span>{activeBall.uncertain_frames || 0} frames kept uncertain because the active ball was ambiguous or jumped implausibly.</span></div>
+      </section>}
+      {evidenceStatus && <div className="evidence-strip">
+        <span><strong>Audio:</strong> {evidenceStatus.audio?.status || 'unknown'} ({evidenceStatus.audio_impulses || 0} impulses)</span>
+        <span><strong>Pose:</strong> {evidenceStatus.pose === 'enabled' ? 'enabled' : 'not configured'}</span>
+        <span><strong>Contact proposals:</strong> {evidenceStatus.contact_proposals || 0}</span>
+        <span><strong>Rule decisions:</strong> {evidenceStatus.semantic_rule_decisions || 0}</span>
+        <span>{evidenceStatus.scoring_policy}</span>
+      </div>}
+      {analysis.system_scope && <details className="scope-disclosure">
+        <summary>What this build really uses</summary>
+        <div>
+          <section><strong>Running in this analysis</strong>{analysis.system_scope.runtime?.map(item => <span key={item}>✓ {item}</span>)}</section>
+          <section><strong>Research demo only</strong>{analysis.system_scope.research_only?.map(item => <span key={item}>◌ {item}</span>)}</section>
+          <section><strong>Not validated yet</strong>{analysis.system_scope.not_validated?.map(item => <span key={item}>! {item}</span>)}</section>
+        </div>
+      </details>}
+
+      <div className="review-grid">
+        <main className="video-column">
+          <div className="video-toolbar">
+            <div><button className={videoMode === 'annotated' ? 'active' : ''} onClick={() => setVideoMode('annotated')}>Smart overlay</button><button className={videoMode === 'original' ? 'active' : ''} onClick={() => setVideoMode('original')}>Original</button></div>
+            <span>Frame {currentFrame.toLocaleString()}</span>
           </div>
-        </Panel>
+          <div className="video-shell"><video ref={videoRef} key={videoMode} controls muted src={videoMode === 'annotated' ? getAnnotatedVideoUrl(id) : getRecordingVideoUrl(id)} onTimeUpdate={event => setCurrentFrame(Math.floor(event.currentTarget.currentTime * fps))} /></div>
 
-        <Separator style={{ width: 4, background: '#e0e0e0', cursor: 'col-resize' }} />
+          <div className="stats-grid">
+            <Stat label="Rallies" value={stats.rallies} />
+            <Stat label="Tracked hits" value={stats.hits} />
+            <Stat label="Bounces" value={stats.bounces} />
+            <Stat label="Wall contacts" value={stats.wall_hits} />
+            <Stat label="Longest rally" value={`${stats.longest_rally_seconds}s`} />
+          </div>
 
-        <Panel defaultSize={45} minSize={25}>
-          <Group orientation="vertical" style={{ height: '100%' }}>
-            <Panel defaultSize={45} minSize={20}>
-              <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-                <Scoreboard score={score} />
-                <EventLog events={events} onEventClick={seekToEvent} />
-              </div>
-            </Panel>
-            <Separator style={{ height: 4, background: '#e0e0e0', cursor: 'row-resize' }} />
-            <Panel defaultSize={55} minSize={25}>
-              <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-                {/* 2D/3D toggle */}
-                <div style={{ display: 'flex', padding: '4px 8px', background: '#1a2332', borderBottom: '1px solid #2a3342', gap: 4 }}>
-                  <button onClick={() => setView3D(false)} style={{
-                    flex: 1, padding: '4px 8px', fontSize: 11, border: 'none', borderRadius: 4, cursor: 'pointer',
-                    background: !view3D ? '#00b894' : '#2a3342', color: !view3D ? 'white' : '#6b7b8d',
-                  }}>2D Top-Down</button>
-                  <button onClick={() => setView3D(true)} style={{
-                    flex: 1, padding: '4px 8px', fontSize: 11, border: 'none', borderRadius: 4, cursor: 'pointer',
-                    background: view3D ? '#6c5ce7' : '#2a3342', color: view3D ? 'white' : '#6b7b8d',
-                  }}>3D Court</button>
-                </div>
-                {view3D ? (
-                  <Court3DView
-                    players={playerDots}
-                    ballPosition={currentBall ? { x: currentBall.x, y: currentBall.y, z: currentBall.z } : null}
-                    ballTrail={ballTrail.map((p, i) => {
-                      // Find matching trajectory point to get Z
-                      const tp = trajectory.find(t => Math.abs(t.x - p.x) < 0.1 && Math.abs(t.y - p.y) < 0.1);
-                      return { x: p.x, y: p.y, z: tp?.z || 0 };
-                    })}
-                  />
-                ) : (
-                  <CourtMiniMap
-                    players={playerDots}
-                    ballPosition={currentBall ? { x: currentBall.x, y: currentBall.y } : null}
-                    ballTrail={ballTrail}
-                  />
-                )}
-                {status === 'complete' && (
-                  <div style={{ padding: '6px 12px', background: '#1a2332', borderTop: '1px solid #2a3342', fontSize: 11, color: '#6b7b8d', flexShrink: 0 }}>
-                    Frame {currentFrame} | Ball: {trajectory.length} pts | Events: {events.length}
-                  </div>
-                )}
-              </div>
-            </Panel>
-          </Group>
-        </Panel>
-      </Group>
+          <div className="score-review-card">
+            <div><h2>Score</h2><p>Only confirmed point decisions are included.</p></div>
+            <Scoreboard score={analysis.score} />
+            <div className="manual-points"><span>Manual point</span><button onClick={() => addPoint(1)}>+ Team A</button><button onClick={() => addPoint(2)}>+ Team B</button></div>
+          </div>
+          <ReviewQueue reviews={reviews} onResolve={resolve} onSeek={frame => seek(frame / fps)} />
+        </main>
+
+        <aside className="moments-column">
+          <nav className="panel-tabs"><button className={panel === 'highlights' ? 'active' : ''} onClick={() => setPanel('highlights')}>Rallies</button><button className={panel === 'events' ? 'active' : ''} onClick={() => setPanel('events')}>Events</button><button className={panel === 'court' ? 'active' : ''} onClick={() => setPanel('court')}>Court</button></nav>
+          {panel === 'highlights' && <HighlightList matchId={id} highlights={highlights} onSeek={seek} />}
+          {panel === 'events' && <EventLog events={events} onEventClick={(event: EventData) => seek(event.timestamp)} />}
+          {panel === 'court' && <div className="court-panel">
+            <div className="court-view-toggle">
+              <button className={courtView === '2d' ? 'active' : ''} onClick={() => setCourtView('2d')}>2D</button>
+              <button className={courtView === '3d' ? 'active' : ''} onClick={() => setCourtView('3d')}>3D</button>
+              {courtView === '3d' && <small>Ball height from ballistic fit; flat when the fit was unreliable.</small>}
+            </div>
+            {courtView === '2d'
+              ? <CourtMiniMap players={players} ballPosition={currentBall ? { x: currentBall.x, y: currentBall.y } : null} />
+              : <div className="court-3d-shell"><Court3DView players={players} ballPosition={currentBall ? { x: currentBall.x, y: currentBall.y, z: currentBall.z || 0 } : null} ballTrail={ballTrail} /></div>}
+          </div>}
+        </aside>
+      </div>
     </div>
   );
 };
+
+const Stat: React.FC<{ label: string; value: React.ReactNode }> = ({ label, value }) => <div className="stat"><strong>{value}</strong><span>{label}</span></div>;
+
+const HighlightList: React.FC<{ matchId: string; highlights: Highlight[]; onSeek: (seconds: number) => void }> = ({ matchId, highlights, onSeek }) => (
+  <div className="highlight-list">
+    {highlights.length === 0 && <div className="empty-panel"><strong>No complete rallies detected</strong><span>Use the event list and review queue. The app will not invent highlights when evidence is missing.</span></div>}
+    {highlights.map(item => <div key={item.id} className="highlight-card" role="button" tabIndex={0} onClick={() => onSeek(item.start_seconds)} onKeyDown={event => event.key === 'Enter' && onSeek(item.start_seconds)}>
+      <span className="play-dot">▶</span><span><strong>{item.title}</strong><small>{formatTime(item.start_seconds)} – {formatTime(item.end_seconds)} · {item.end_reason.split('_').join(' ')}</small></span>
+      <span className="highlight-tools">{item.needs_review && <em>Review</em>}<a href={getHighlightClipUrl(matchId, item.id)} onClick={event => event.stopPropagation()}>Download</a></span>
+    </div>)}
+  </div>
+);
 
 export default OfflineAnalysis;

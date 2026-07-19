@@ -1,5 +1,5 @@
 import React from 'react';
-import { Routes, Route } from 'react-router-dom';
+import { Routes, Route, Navigate } from 'react-router-dom';
 import NavBar from './components/NavBar';
 import Dashboard from './pages/Dashboard';
 import MatchSetup from './pages/MatchSetup';
@@ -17,6 +17,7 @@ const App: React.FC = () => (
         <Route path="/match/:id/calibrate" element={<Calibration />} />
         <Route path="/match/:id/analyze" element={<OfflineAnalysis />} />
         <Route path="/match/:id/live" element={<LiveView />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </main>
   </div>

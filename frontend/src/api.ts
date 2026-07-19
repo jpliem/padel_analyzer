@@ -1,9 +1,11 @@
 import type {
   MatchSummary, MatchData, MatchSetupData, ScoreData,
-  EventData, AnalysisStatus, TrajectoryPoint, LiveStartData,
+  EventData, AnalysisStatus, TrajectoryPoint, LiveStartData, ReviewRecord,
+  MatchResult, Highlight, MatchStats,
 } from './types';
 
-const API = 'http://localhost:8000';
+const API_PORT = process.env.REACT_APP_API_PORT || '8000';
+const API = process.env.REACT_APP_API_URL || `http://${window.location.hostname || 'localhost'}:${API_PORT}`;
 
 export async function autoDetectCourt(matchId: string): Promise<{ keypoints: number[][]; mode: string }> {
   return fetchJSON(`${API}/match/${matchId}/auto-detect-court`, { method: 'POST' });
@@ -11,6 +13,18 @@ export async function autoDetectCourt(matchId: string): Promise<{ keypoints: num
 
 export function getAnnotatedVideoUrl(matchId: string): string {
   return `${API}/match/${matchId}/annotated`;
+}
+
+export function getRecordingVideoUrl(matchId: string): string {
+  return `${API}/match/${matchId}/recording`;
+}
+
+export function getExportUrl(matchId: string, format: 'json' | 'csv'): string {
+  return `${API}/match/${matchId}/export.${format}`;
+}
+
+export function getHighlightClipUrl(matchId: string, highlightId: string): string {
+  return `${API}/match/${matchId}/highlights/${highlightId}.mp4`;
 }
 
 async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
@@ -72,6 +86,22 @@ export async function getAnalysisStatus(jobId: string): Promise<AnalysisStatus> 
   return fetchJSON(`${API}/analyze/status/${jobId}`);
 }
 
+export async function cancelAnalysis(jobId: string): Promise<void> {
+  await fetchJSON(`${API}/analyze/cancel/${jobId}`, { method: 'POST' });
+}
+
+export async function getMatchResult(id: string): Promise<MatchResult> {
+  return fetchJSON(`${API}/match/${id}/result`);
+}
+
+export async function getHighlights(id: string): Promise<{ highlights: Highlight[] }> {
+  return fetchJSON(`${API}/match/${id}/highlights`);
+}
+
+export async function getStats(id: string): Promise<{ stats: MatchStats }> {
+  return fetchJSON(`${API}/match/${id}/stats`);
+}
+
 export async function getPositions(id: string): Promise<{ positions: any[] }> {
   return fetchJSON(`${API}/match/${id}/positions`);
 }
@@ -82,6 +112,26 @@ export async function getScore(id: string): Promise<ScoreData> {
 
 export async function getEvents(id: string): Promise<{ events: EventData[] }> {
   return fetchJSON(`${API}/match/${id}/events`);
+}
+
+export async function getReviews(id: string): Promise<{ reviews: ReviewRecord[] }> {
+  return fetchJSON(`${API}/match/${id}/reviews`);
+}
+
+export async function resolveReview(matchId: string, recordId: string,
+  confirmed: boolean, winnerTeam?: number): Promise<{ review: ReviewRecord; score: ScoreData }> {
+  return fetchJSON(`${API}/match/${matchId}/reviews/${recordId}/resolve`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ confirmed, winner_team: winnerTeam ?? null }),
+  });
+}
+
+export async function correctReview(matchId: string, recordId: string,
+  winnerTeam: number): Promise<{ review: ReviewRecord; score: ScoreData }> {
+  return fetchJSON(`${API}/match/${matchId}/reviews/${recordId}/correct`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ winner_team: winnerTeam, reason: 'manual' }),
+  });
 }
 
 export async function getTrajectory(id: string): Promise<{ trajectory: TrajectoryPoint[] }> {
@@ -104,8 +154,8 @@ export async function getReplay(): Promise<any> {
   return fetchJSON(`${API}/live/replay`);
 }
 
-export async function correctScore(matchId: string, team: number): Promise<void> {
-  await fetchJSON(`${API}/match/${matchId}/correct-score`, {
+export async function correctScore(matchId: string, team: number): Promise<{ score: ScoreData }> {
+  return fetchJSON(`${API}/match/${matchId}/correct-score`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ team }),

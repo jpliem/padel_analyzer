@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import { calibrate, uploadVideo, listTemplates, getTemplate, saveTemplate, autoDetectCourt, CalibrationTemplate } from '../api';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
+import { calibrate, uploadVideo, listTemplates, getTemplate, saveTemplate, autoDetectCourt, CalibrationTemplate, getMatch, getRecordingVideoUrl } from '../api';
 import CalibrationCanvas from '../components/CalibrationCanvas';
 import CourtMiniMap from '../components/CourtMiniMap';
 
@@ -30,12 +30,14 @@ const KEYPOINT_COURT = [
 const Calibration: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [keypoints, setKeypoints] = useState<number[][]>([]);
   const [netTopPoints, setNetTopPoints] = useState<number[][]>([]);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [hasServerVideo, setHasServerVideo] = useState(false);
 
   // Templates
   const [templates, setTemplates] = useState<CalibrationTemplate[]>([]);
@@ -44,6 +46,7 @@ const Calibration: React.FC = () => {
 
   useEffect(() => {
     listTemplates().then(r => setTemplates(r.templates)).catch(() => {});
+    if (id) getMatch(id).then(match => setHasServerVideo(!!match.media)).catch(() => {});
   }, []);
 
   const handleClick = (x: number, y: number) => {
@@ -58,12 +61,12 @@ const Calibration: React.FC = () => {
   const [autoDetecting, setAutoDetecting] = useState(false);
 
   const handleAutoDetect = async () => {
-    if (!id || !videoFile) return;
+    if (!id || (!videoFile && !hasServerVideo)) return;
     setAutoDetecting(true);
     setError(null);
     try {
       // Step 1: Upload video
-      await uploadVideo(id, videoFile);
+      if (videoFile) await uploadVideo(id, videoFile);
 
       // Step 2: Run auto-detection on first frame
       const result = await autoDetectCourt(id);
@@ -145,6 +148,7 @@ const Calibration: React.FC = () => {
       <div style={{ flex: 2 }}>
         <CalibrationCanvas
           videoFile={videoFile}
+          videoUrl={!videoFile && hasServerVideo && id ? getRecordingVideoUrl(id) : undefined}
           corners={keypoints}
           onCornerClick={handleClick}
           onReset={() => setKeypoints([])}
@@ -154,9 +158,10 @@ const Calibration: React.FC = () => {
       {/* Right: Controls */}
       <div style={{ flex: 1, minWidth: 300, padding: 16, display: 'flex', flexDirection: 'column', gap: 8, background: '#fafafa', borderLeft: '1px solid #e0e0e0', overflow: 'auto' }}>
         <h2 style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>Court Calibration</h2>
+        {(location.state as any)?.notice && <div style={{ padding: 10, borderRadius: 6, background: '#fff8e1', border: '1px solid #fdcb6e', fontSize: 12 }}>{(location.state as any).notice}</div>}
 
         {/* Auto-detect option */}
-        {!saved && videoFile && keypoints.length === 0 && (
+        {!saved && (videoFile || hasServerVideo) && keypoints.length === 0 && (
           <button
             className="btn btn-success"
             style={{ width: '100%', padding: 12, fontSize: 14 }}
@@ -166,7 +171,7 @@ const Calibration: React.FC = () => {
             {autoDetecting ? 'Detecting court lines...' : 'Auto-Detect Court Lines (Recommended)'}
           </button>
         )}
-        {!saved && videoFile && keypoints.length === 0 && (
+        {!saved && (videoFile || hasServerVideo) && keypoints.length === 0 && (
           <div style={{ textAlign: 'center', fontSize: 12, color: '#888' }}>
             — or click court keypoints manually below —
           </div>

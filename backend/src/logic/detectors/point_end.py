@@ -23,9 +23,12 @@ class PointEndDetector:
     def check(self, bounce: Optional[Dict], ball_pos: Optional[Dict],
               ball_lost: bool, wall_hit=None) -> Optional[Dict]:
 
-        # 1. Ball lost
+        # Missing detections are perception uncertainty, not a padel event.  The
+        # ball can be behind a player, above the frame, or legitimately outside
+        # the court during authorised out-of-court play.  Only positive spatial
+        # or contact evidence below may end the point.
         if ball_lost:
-            return {"reason": PointReason.OUT, "detail": "ball_lost"}
+            return None
 
         if ball_pos is None:
             return None

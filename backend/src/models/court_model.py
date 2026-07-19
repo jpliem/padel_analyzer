@@ -57,6 +57,11 @@ _DEFAULTS: Dict[str, object] = {
     "fence_height": 4.0,
     "include_mesh_above_back_walls": False,
     "mesh_height": 1.0,
+    "out_of_court_play_enabled": False,
+    "gate_center_y": 10.0,
+    "gate_width": 2.0,
+    "safety_zone_lateral_depth": 2.0,
+    "safety_zone_y_margin": 1.0,
 }
 
 
@@ -100,6 +105,11 @@ class PadelCourtModel:
         self._fence_height: float = cfg["fence_height"]
         self._include_mesh: bool = cfg["include_mesh_above_back_walls"]
         self._mesh_height: float = cfg["mesh_height"]
+        self.out_of_court_play_enabled: bool = bool(cfg["out_of_court_play_enabled"])
+        self.gate_center_y: float = float(cfg["gate_center_y"])
+        self.gate_width: float = float(cfg["gate_width"])
+        self.safety_zone_lateral_depth: float = float(cfg["safety_zone_lateral_depth"])
+        self.safety_zone_y_margin: float = float(cfg["safety_zone_y_margin"])
 
         self._walls: List[WallSegment] = self._build_walls()
         self._wall_index: Dict[str, WallSegment] = {w.wall_id: w for w in self._walls}
@@ -243,6 +253,56 @@ class PadelCourtModel:
             "y_min": 0.0,
             "y_max": self.court_length,
         }
+
+    def gate_y_bounds(self) -> Tuple[float, float]:
+        half = self.gate_width / 2.0
+        return self.gate_center_y - half, self.gate_center_y + half
+
+    def classify_region(self, x: float, y: float, z: float = 0.0) -> str:
+        """Classify a position without assuming outside means point over."""
+        if 0.0 <= x <= self.court_width and 0.0 <= y <= self.court_length:
+            return "court"
+
+        gate_min, gate_max = self.gate_y_bounds()
+        safety_min = gate_min - self.safety_zone_y_margin
+        safety_max = gate_max + self.safety_zone_y_margin
+        if gate_min <= y <= gate_max:
+            if -self.safety_zone_lateral_depth <= x < 0.0:
+                return "left_gate" if abs(x) < 0.25 else "outside_recovery_left"
+            if self.court_width < x <= self.court_width + self.safety_zone_lateral_depth:
+                return "right_gate" if abs(x - self.court_width) < 0.25 else "outside_recovery_right"
+        if self.out_of_court_play_enabled and safety_min <= y <= safety_max:
+            if -self.safety_zone_lateral_depth <= x < 0.0:
+                return "outside_recovery_left"
+            if self.court_width < x <= self.court_width + self.safety_zone_lateral_depth:
+                return "outside_recovery_right"
+        return "outside_unrecoverable"
+
+    def is_recoverable_position(self, x: float, y: float, z: float = 0.0) -> bool:
+        if not self.out_of_court_play_enabled:
+            return False
+        return self.classify_region(x, y, z) in {
+            "left_gate", "right_gate", "outside_recovery_left", "outside_recovery_right",
+        }
+
+    def infer_exit_portal(
+        self,
+        previous: Tuple[float, float, float],
+        current: Tuple[float, float, float],
+    ) -> Optional[str]:
+        """Return the enclosure boundary crossed by a trajectory segment."""
+        px, py, _ = previous
+        x, y, _ = current
+        gate_min, gate_max = self.gate_y_bounds()
+        if px >= 0.0 and x < 0.0:
+            return "left_gate" if gate_min <= y <= gate_max else "left_side_over_wall"
+        if px <= self.court_width and x > self.court_width:
+            return "right_gate" if gate_min <= y <= gate_max else "right_side_over_wall"
+        if py >= 0.0 and y < 0.0:
+            return "near_back_wall"
+        if py <= self.court_length and y > self.court_length:
+            return "far_back_wall"
+        return None
 
     def nearest_wall(
         self,

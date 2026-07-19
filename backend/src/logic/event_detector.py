@@ -13,12 +13,13 @@ from models.court_model import PadelCourtModel
 class EventDetector:
     def __init__(self, config: EventDetectorConfig, calibration,
                  scoring_engine, player_tracker, team_map: Dict[str, int],
-                 court_model: PadelCourtModel = None):
+                 court_model: PadelCourtModel = None, review_ledger=None):
         self._config = config
         self._calibration = calibration
         self._scoring_engine = scoring_engine
         self._player_tracker = player_tracker
         self._team_map = team_map
+        self._review_ledger = review_ledger
 
         self.state_machine = MatchStateMachine()
         self._bounce_detector = BounceDetector(config)
@@ -34,6 +35,7 @@ class EventDetector:
     def process(self, ball_pos: Optional[Dict], player_positions: List[Dict],
                 frame_no: int) -> List[MatchEvent]:
         events: List[MatchEvent] = []
+        self._current_frame = frame_no
 
         self._serve_detector.current_server = getattr(
             self._scoring_engine, 'current_server', None
@@ -101,7 +103,19 @@ class EventDetector:
                            last_hitter_track_id: Optional[int]):
         winner_team = self._determine_winner(reason, side, last_hitter_track_id)
         if winner_team is not None:
-            self._scoring_engine.add_point(winner_team, reason)
+            if self._review_ledger is not None:
+                self._review_ledger.propose(
+                    frame_number=getattr(self, "_current_frame", 0),
+                    winner_team=winner_team,
+                    reason=reason,
+                    # The legacy detector does not yet expose calibrated
+                    # evidence confidence. Keep its point call reviewable.
+                    confidence=0.60,
+                    source="legacy_event_detector",
+                )
+                self._scoring_engine = self._review_ledger.replay()
+            else:
+                self._scoring_engine.add_point(winner_team, reason)
 
     def _determine_winner(self, reason: PointReason, side: Optional[str],
                           last_hitter_track_id: Optional[int]) -> Optional[int]:

@@ -2,7 +2,7 @@ import json
 import subprocess
 import sys
 
-from scripts.vlm_ball_probe import extract_video_points, summarize_against_gt
+from scripts.vlm_ball_probe import extract_video_points, load_label_gt, summarize_against_gt
 
 
 def test_extract_video_points_scales_molmo_coordinates():
@@ -57,3 +57,13 @@ def test_cli_can_parse_raw_text_without_video(tmp_path):
     assert result.returncode == 0, result.stderr
     data = json.loads(out.read_text())
     assert data["points"] == [{"frame": 0.0, "id": "1", "x": 640.0, "y": 180.0}]
+
+
+def test_load_label_gt_uses_only_reviewed_visible_centers(tmp_path):
+    path = tmp_path / "labels.json"
+    path.write_text(json.dumps({"labels": [
+        {"frame": 1, "state": "visible", "center": [10, 20]},
+        {"frame": 2, "state": "occluded", "center": None},
+        {"frame": 3, "state": "unreviewed", "center": None},
+    ]}))
+    assert load_label_gt(path) == [None, (10.0, 20.0)]

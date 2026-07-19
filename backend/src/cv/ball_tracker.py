@@ -45,13 +45,7 @@ class BallTracker:
             if z < 0.05 and hasattr(self.calibration, 'project_to_ground'):
                 z = self._estimate_z_from_camera(cx, cy)
 
-            # Project to court coordinates
-            if hasattr(self.calibration, 'project_to_height') and z > 0.2:
-                court_x, court_y = self.calibration.project_to_height(cx, cy, z)
-            elif hasattr(self.calibration, 'project_to_ground'):
-                court_x, court_y = self.calibration.project_to_ground(cx, cy)
-            else:
-                court_x, court_y = self.calibration.pixel_to_court(cx, cy)
+            court_x, court_y = self._to_court(cx, cy, z)
             if not self._initialized:
                 self._kf.x = np.array([court_x, court_y, 0, 0])
                 self._initialized = True
@@ -83,6 +77,17 @@ class BallTracker:
                    "timestamp": timestamp, "frame": frame_number, "detected": False}
             self.trajectory.append(pos)
             return pos
+
+    def _to_court(self, cx: float, cy: float, z: float) -> tuple:
+        """Project pixel center to court coordinates; pixel passthrough when uncalibrated."""
+        cal = self.calibration
+        if hasattr(cal, 'project_to_height') and z > 0.2:
+            return cal.project_to_height(cx, cy, z)
+        if hasattr(cal, 'project_to_ground'):
+            return cal.project_to_ground(cx, cy)
+        if getattr(cal, 'homography', None) is not None:
+            return cal.pixel_to_court(cx, cy)
+        return cx, cy
 
     BALL_REAL_DIAMETER = 0.065  # padel ball = 6.5cm
 

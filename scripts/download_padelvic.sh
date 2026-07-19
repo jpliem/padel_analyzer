@@ -29,7 +29,7 @@ ENTRIES=(
   # --- ground truth ---
   "mocap|bvh.zip|https://www.dropbox.com/scl/fi/sl5hdlr6bal69v2acdbei/bvh.zip?rlkey=13ttllqg65ayoujhozpy75yzd&dl=1"
 
-  # --- synthetic clips (paired with CSV ball/position ground truth) ---
+  # --- synthetic Xsens clips (paired with projected positional GT; not ball labels) ---
   "synthetic|1630-16300.mp4|https://www.dropbox.com/scl/fi/clsjqiwvby6w8byv9g0ap/1630-16300.mp4?rlkey=aqecxe72tasojmoqi721l6mdv&dl=1"
   "synthetic|001-2200-3960.mkv|https://www.dropbox.com/scl/fi/lv1itp4vpnwywudwe6t6b/001-2200-3960.mkv?rlkey=fm1544hw7gwzzcw8ly9ulfyku&dl=1"
   "synthetic|001-1250-17462.mkv|https://www.dropbox.com/scl/fi/hhw2ag7nfligagrgu01nm/001-1250-17462.mkv?rlkey=9pcmp205da9ifanqxr1uc99ox&dl=1"
@@ -63,6 +63,7 @@ for entry in "${ENTRIES[@]}"; do
 
   dir="$DEST/$subdir"
   out="$dir/$fname"
+  part="$out.part"
   mkdir -p "$dir"
 
   if [ -f "$out" ] && [ -s "$out" ]; then
@@ -73,10 +74,11 @@ for entry in "${ENTRIES[@]}"; do
 
   echo "get   $subdir/$fname"
   # -L follow redirects, -C - resume, --fail error on 4xx/5xx, retry on transient errors.
-  curl -L -C - --fail --retry 3 --retry-delay 2 -o "$out" "$url" || {
+  curl -L -C - --fail --retry 3 --retry-delay 2 -o "$part" "$url" || {
     echo "FAILED $subdir/$fname — leaving partial for resume" >&2
     continue
   }
+  mv "$part" "$out"
   downloaded=$((downloaded+1))
 done
 

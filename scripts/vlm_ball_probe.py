@@ -61,6 +61,19 @@ def load_gt(csv_path):
     return gt
 
 
+def load_label_gt(labels_path):
+    """Load reviewed v1 ball labels into a frame-indexed sparse list."""
+    with open(labels_path) as handle:
+        doc = json.load(handle)
+    reviewed = [item for item in doc.get("labels", [])
+                if item.get("state") in ("visible", "blurred") and item.get("center")]
+    size = max((int(item["frame"]) for item in reviewed), default=-1) + 1
+    gt = [None] * size
+    for item in reviewed:
+        gt[int(item["frame"])] = tuple(float(v) for v in item["center"])
+    return gt
+
+
 def summarize_against_gt(points, gt, threshold_px=50):
     errors = []
     matched = []
@@ -138,7 +151,7 @@ def main():
     parser.add_argument("--video", help="Video file/URL. Required unless --raw-text is used.")
     parser.add_argument("--model-id", default="allenai/Molmo2-VideoPoint-4B")
     parser.add_argument("--prompt", default="Point to the padel ball in each visible frame.")
-    parser.add_argument("--csv", help="Optional PADELVIC synthetic CSV for scoring")
+    parser.add_argument("--labels", help="Optional reviewed v1 ball labels.json for scoring")
     parser.add_argument("--threshold-px", type=float, default=50)
     parser.add_argument("--max-new-tokens", type=int, default=2048)
     parser.add_argument("--raw-text", help="Parse an existing model response instead of loading a VLM")
@@ -167,9 +180,9 @@ def main():
         "generated_text": generated_text,
         "points": points,
     }
-    if args.csv:
+    if args.labels:
         result["summary"] = summarize_against_gt(
-            points, load_gt(args.csv), threshold_px=args.threshold_px)
+            points, load_label_gt(args.labels), threshold_px=args.threshold_px)
 
     out = args.out if os.path.isabs(args.out) else os.path.abspath(args.out)
     with open(out, "w") as f:

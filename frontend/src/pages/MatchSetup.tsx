@@ -1,112 +1,111 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { createMatch } from '../api';
+import { autoDetectCourt, createMatch, startMatchAnalysis, uploadVideo } from '../api';
 
 const MatchSetup: React.FC = () => {
   const navigate = useNavigate();
-  const [name, setName] = useState('Match');
+  const [video, setVideo] = useState<File | null>(null);
+  const [name, setName] = useState('Friday padel');
+  const [players, setPlayers] = useState({ P1: 'Player 1', P2: 'Player 2', P3: 'Player 3', P4: 'Player 4' });
   const [format, setFormat] = useState('best_of_3');
   const [goldenPoint, setGoldenPoint] = useState(true);
-  const [players, setPlayers] = useState({ P1: 'Player 1', P2: 'Player 2', P3: 'Player 3', P4: 'Player 4' });
   const [firstServer, setFirstServer] = useState('P1');
-  const [submitting, setSubmitting] = useState(false);
+  const [automaticCourt, setAutomaticCourt] = useState(true);
+  const [step, setStep] = useState('');
   const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = async () => {
-    setSubmitting(true);
+  const videoLabel = useMemo(() => {
+    if (!video) return 'MP4, MOV or phone recording';
+    return `${video.name} · ${(video.size / 1024 / 1024).toFixed(1)} MB`;
+  }, [video]);
+
+  const submit = async () => {
+    if (!video) {
+      setError('Choose the match recording first.');
+      return;
+    }
     setError(null);
     try {
-      const result = await createMatch({
-        match_name: name,
-        players,
+      setStep('Creating match…');
+      const created = await createMatch({
+        match_name: name.trim() || 'Padel match', players,
         teams: { TEAM_A: ['P1', 'P2'], TEAM_B: ['P3', 'P4'] },
-        golden_point: goldenPoint,
-        format,
+        golden_point: goldenPoint, format, first_server: firstServer,
+        out_of_court_play_enabled: false,
       });
-      navigate(`/match/${result.match_id}/calibrate`);
+      setStep('Uploading recording…');
+      await uploadVideo(created.match_id, video, 'tracknet');
+
+      if (!automaticCourt) {
+        navigate(`/match/${created.match_id}/calibrate`);
+        return;
+      }
+
+      setStep('Finding court lines…');
+      try {
+        await autoDetectCourt(created.match_id);
+      } catch {
+        navigate(`/match/${created.match_id}/calibrate`, {
+          state: { notice: 'Automatic court detection needs a quick manual check.' },
+        });
+        return;
+      }
+
+      setStep('Starting smart analysis…');
+      await startMatchAnalysis(created.match_id);
+      navigate(`/match/${created.match_id}/analyze`);
     } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setSubmitting(false);
+      setError(err.message || 'Could not create this match.');
+      setStep('');
     }
   };
 
-  const Toggle: React.FC<{ value: boolean; onToggle: (v: boolean) => void; labelTrue: string; labelFalse: string }> =
-    ({ value, onToggle, labelTrue, labelFalse }) => (
-      <div style={{ display: 'flex', gap: 4 }}>
-        <button
-          onClick={() => onToggle(true)}
-          style={{
-            flex: 1, padding: 8, textAlign: 'center', borderRadius: 6, fontSize: 13, fontWeight: 500, cursor: 'pointer',
-            border: value ? '2px solid #1a1a2e' : '1px solid #d0d0d0',
-            background: value ? '#1a1a2e' : 'white',
-            color: value ? 'white' : '#555',
-          }}
-        >{labelTrue}</button>
-        <button
-          onClick={() => onToggle(false)}
-          style={{
-            flex: 1, padding: 8, textAlign: 'center', borderRadius: 6, fontSize: 13, fontWeight: 500, cursor: 'pointer',
-            border: !value ? '2px solid #1a1a2e' : '1px solid #d0d0d0',
-            background: !value ? '#1a1a2e' : 'white',
-            color: !value ? 'white' : '#555',
-          }}
-        >{labelFalse}</button>
-      </div>
-    );
-
   return (
-    <div style={{ padding: 32, maxWidth: 560, margin: '0 auto' }}>
-      <h1 style={{ fontSize: 20, fontWeight: 700, marginBottom: 24 }}>New Match</h1>
-      {error && <div style={{ padding: 12, background: '#fff3f3', border: '1px solid #e17055', borderRadius: 8, marginBottom: 16, color: '#e17055', fontSize: 13 }}>{error}</div>}
-      <div style={{ marginBottom: 20 }}>
-        <div className="label">Match Name</div>
-        <input type="text" value={name} onChange={e => setName(e.target.value)} />
-      </div>
-      <div style={{ display: 'flex', gap: 16, marginBottom: 20 }}>
-        <div style={{ flex: 1 }}>
-          <div className="label">Format</div>
-          <Toggle value={format === 'best_of_3'} onToggle={v => setFormat(v ? 'best_of_3' : 'best_of_1')} labelTrue="Best of 3" labelFalse="Best of 1" />
+    <div className="setup-page">
+      <section className="setup-intro">
+        <span className="eyebrow">Single-camera smart recording</span>
+        <h1>Turn one fixed-court video into a match you can review.</h1>
+        <p>Get an annotated recording, rally moments, approximate court tracking and a queue for uncertain calls.</p>
+        <div className="camera-guide">
+          <strong>Best camera position</strong>
+          <span>Centered behind one baseline, above head height, landscape, with the full court visible. Keep it fixed for the match.</span>
         </div>
-        <div style={{ flex: 1 }}>
-          <div className="label">Deuce Rule</div>
-          <Toggle value={goldenPoint} onToggle={setGoldenPoint} labelTrue="Golden Point" labelFalse="Advantage" />
-        </div>
-      </div>
-      <div style={{ display: 'flex', gap: 16, marginBottom: 20 }}>
-        {[
-          { label: 'Team A', color: '#74b9ff', ids: ['P1', 'P2'] },
-          { label: 'Team B', color: '#e17055', ids: ['P3', 'P4'] },
-        ].map(team => (
-          <div key={team.label} style={{ flex: 1, background: 'white', border: '1px solid #e0e0e0', borderRadius: 10, padding: 16 }}>
-            <div style={{ fontSize: 12, fontWeight: 600, color: team.color, textTransform: 'uppercase' as const, marginBottom: 12 }}>{team.label}</div>
-            {team.ids.map((id, i) => (
-              <div key={id} style={{ marginBottom: i === 0 ? 8 : 0 }}>
-                <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>{id}</div>
-                <input type="text" value={players[id as keyof typeof players]} onChange={e => setPlayers({ ...players, [id]: e.target.value })} />
-              </div>
-            ))}
-          </div>
-        ))}
-      </div>
-      <div style={{ marginBottom: 24 }}>
-        <div className="label">First Server</div>
-        <div style={{ display: 'flex', gap: 4 }}>
-          {['P1', 'P2', 'P3', 'P4'].map(id => (
-            <button key={id} onClick={() => setFirstServer(id)}
-              style={{
-                flex: 1, padding: 8, textAlign: 'center', borderRadius: 6, fontSize: 13, cursor: 'pointer',
-                border: firstServer === id ? '2px solid #1a1a2e' : '1px solid #d0d0d0',
-                background: firstServer === id ? '#1a1a2e' : 'white',
-                color: firstServer === id ? 'white' : '#555',
-              }}
-            >{id} — {players[id as keyof typeof players]}</button>
+        <div className="truth-note">One camera cannot guarantee depth or hidden-ball decisions. The app marks uncertain moments for a person to confirm.</div>
+      </section>
+
+      <section className="setup-card">
+        <div className="setup-step"><span>1</span><div><strong>Add the recording</strong><small>The original stays available beside the annotated version.</small></div></div>
+        <label className={`video-drop ${video ? 'has-file' : ''}`}>
+          <input type="file" accept="video/mp4,video/quicktime,video/*" hidden
+            onChange={event => setVideo(event.target.files?.[0] || null)} />
+          <span className="video-drop-icon">{video ? '✓' : '↑'}</span>
+          <strong>{video ? 'Recording ready' : 'Choose match video'}</strong>
+          <small>{videoLabel}</small>
+        </label>
+
+        <div className="setup-step"><span>2</span><div><strong>Name the match and players</strong><small>You can use placeholders for a quick demo.</small></div></div>
+        <label className="field-label">Match name<input value={name} onChange={event => setName(event.target.value)} /></label>
+        <div className="team-grid">
+          {(['P1', 'P2', 'P3', 'P4'] as const).map((id, index) => (
+            <label className="field-label" key={id}>{index < 2 ? 'Team A' : 'Team B'} · {id}
+              <input value={players[id]} onChange={event => setPlayers({ ...players, [id]: event.target.value })} />
+            </label>
           ))}
         </div>
-      </div>
-      <button className="btn btn-primary" style={{ width: '100%', padding: 12, fontSize: 15 }} onClick={handleSubmit} disabled={submitting}>
-        {submitting ? 'Creating...' : 'Create Match → Calibrate Court'}
-      </button>
+
+        <details className="advanced-settings">
+          <summary>Match rules</summary>
+          <div className="setting-row">
+            <label>Format<select value={format} onChange={event => setFormat(event.target.value)}><option value="best_of_3">Best of 3</option><option value="best_of_1">One set</option></select></label>
+            <label>Deuce<select value={goldenPoint ? 'golden' : 'advantage'} onChange={event => setGoldenPoint(event.target.value === 'golden')}><option value="golden">Golden point</option><option value="advantage">Advantage</option></select></label>
+            <label>First server<select value={firstServer} onChange={event => setFirstServer(event.target.value)}>{Object.keys(players).map(id => <option key={id}>{id}</option>)}</select></label>
+          </div>
+        </details>
+
+        <label className="auto-court"><input type="checkbox" checked={automaticCourt} onChange={event => setAutomaticCourt(event.target.checked)} /><span><strong>Find court lines automatically</strong><small>If it cannot, the app opens a manual court check.</small></span></label>
+        {error && <div className="form-error">{error}</div>}
+        <button className="btn btn-success create-analysis" onClick={submit} disabled={!!step}>{step || 'Create smart recording'}</button>
+      </section>
     </div>
   );
 };

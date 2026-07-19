@@ -52,11 +52,11 @@ class TestBallStopped:
 
 
 class TestBallLost:
-    def test_ball_lost_triggers_point_end(self, config):
+    def test_ball_lost_never_triggers_point_end_by_itself(self, config):
         from logic.detectors.point_end import PointEndDetector
         ped = PointEndDetector(config)
         result = ped.check(None, ball_pos=None, ball_lost=True)
-        assert result is not None
+        assert result is None
 
 
 class TestReset:

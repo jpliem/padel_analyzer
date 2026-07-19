@@ -17,6 +17,21 @@ def tracker(calibrated_court):
     return BallTracker(calibrated_court, fps=30)
 
 
+class TestUncalibratedFallback:
+    def test_update_without_calibration_stays_in_pixel_space(self):
+        tracker = BallTracker(CourtCalibration(), fps=30)
+        pos = tracker.update(bbox=[500, 400, 520, 420], frame_number=0)
+        assert pos is not None
+        assert pos["x"] == pytest.approx(510.0, abs=1.0)
+        assert pos["y"] == pytest.approx(410.0, abs=1.0)
+
+    def test_prediction_without_calibration_does_not_crash(self):
+        tracker = BallTracker(CourtCalibration(), fps=30)
+        tracker.update(bbox=[500, 400, 520, 420], frame_number=0)
+        pos = tracker.update(bbox=None, frame_number=1)
+        assert pos is not None
+
+
 class TestBallDetection:
     def test_update_with_detection(self, tracker):
         pos = tracker.update(bbox=[500, 400, 520, 420], frame_number=0)

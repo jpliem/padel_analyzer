@@ -2,6 +2,32 @@
 
 _Status as of 2026-06-19. Branch: `feat/eval-harnesses-3d-z`._
 
+> **2026-07-18 addendum — single-camera production path shipped.**
+> - The product direction is now single-camera: `cv/monocular_trajectory.py`
+>   (gravity-constrained ballistic fit) is wired into `VideoAnalyzer` and
+>   verified live on real Panasonic footage (fit confidence 0.97 windows,
+>   plausible 0–5 m heights). Multi-camera triangulation remains the
+>   validation harness, not the product.
+> - `scripts/eval_ball_labels.py` now reads the multi-source combined label
+>   set (`data/labels/padelvic_panasonic_combined/`, 197 reviewed labels,
+>   group-safe train/val/test) and supports `--split`. Measured @15px on the
+>   held-out test rally: `tracknet_padel.pt` conf 0.3 → P/R 63.5 %;
+>   conf 0.5 → P 70 % / R 53.9 % (rejected — recall feeds the ballistic fit).
+>   `tracknet_phase1.pt` collapsed (0 %) and must not be used.
+> - Panasonic ground homography is reproducible from the GT xlsx
+>   (Positions sheet pixel↔metre pairs → RANSAC homography → project the 12
+>   court keypoints); a 12-keypoint `CameraModel` PnP solves from those
+>   projected keypoints, which is what enables `pixel_ray` and the monocular
+>   fit on this footage.
+> - `BallTracker` no longer crashes when running uncalibrated — it stays in
+>   pixel space (regression-tested).
+
+> **2026-07-16 correction:** PadelVic's synthetic CSV coordinates are Xsens
+> positional ground truth and are not documented ball centers. All synthetic
+> “ball accuracy” figures below are invalid and retained only as historical
+> debugging notes. The scripts now require reviewed real ball labels for ball
+> metrics.
+
 ## The problem we were chasing
 The scoring pipeline produced **nothing** on real footage. Traced the failure down link by link:
 
@@ -20,7 +46,8 @@ scoreboard dead
 
 **Evaluation harnesses (grade the analyzer against PADELVIC ground truth):**
 - `backend/cli_analyze.py` — run the pipeline standalone → results.json + annotated video.
-- `scripts/eval_synthetic.py` — ball-detection accuracy vs synthetic CSV GT.
+- `scripts/eval_synthetic.py` — legacy positional-target diagnostic; refuses
+  known PadelVic CSVs by default because they are not ball labels.
 - `scripts/eval_players.py` — player-position accuracy vs xlsx GT (court metres).
 - `scripts/eval_rallies.py` — rally/point detection vs Plays-sheet GT.
 
@@ -71,8 +98,8 @@ scoreboard dead
 **2D ball-first evaluation workflow:**
 - `scripts/prepare_ball_label_set.py` samples real Panasonic frames into a browser labeler and starter `labels.json`.
 - `scripts/eval_ball_labels.py` evaluates real-frame labels with precision/recall, misses, false positives, and pixel error.
-- Existing `scripts/eval_synthetic.py` gives immediate synthetic ball-coordinate baselines.
-- `scripts/benchmark_ball_models.py` compares ready local detector weights on the same synthetic clip.
+- `scripts/eval_ball_labels.py` is the authoritative ball-coordinate gate.
+- `scripts/benchmark_ball_models.py` compares ready weights on reviewed label JSON.
 - Baseline on `001-1250-17462.mkv`, first 100 synthetic frames:
   - YOLO sports-ball: 0.0% detection rate.
   - Fast motion detector: 5.0% detection rate, 122.74 px median error, 0.0% within 50 px.
@@ -83,7 +110,7 @@ scoreboard dead
 
 **Molmo2/VLM probe:**
 - Hugging Face currently lists AllenAI Molmo2 models including `allenai/Molmo2-4B`, `allenai/Molmo2-8B`, and `allenai/Molmo2-VideoPoint-4B`.
-- `scripts/vlm_ball_probe.py` was added to run a Molmo2-style video-pointing prompt and parse `<points coords="...">` outputs into pixel coordinates. It can score those points against PADELVIC synthetic CSV ground truth.
+- `scripts/vlm_ball_probe.py` was added to run a Molmo2-style video-pointing prompt and parse `<points coords="...">` outputs into pixel coordinates. It now scores only against reviewed v1 ball-label JSON; the PadelVic synthetic CSV is not ball ground truth.
 - Installed the model-card dependency stack into `backend/venv`: `transformers==4.57.1`, `accelerate`, `einops`, `decord2`, and `molmo_utils`.
 - Attempted `allenai/Molmo2-VideoPoint-4B` on a 2 s 640x360 synthetic clip. The run downloaded remote processor/model code, then stalled at Hugging Face `snapshot_download` for four checkpoint shards (`0%` after 7m41s), so no inference result was produced locally.
 - Practical conclusion: Molmo2 is not yet a local ball-detector answer. It may be useful later for sparse semantic labels, but ball tracking still needs a specialized detector/tracker or fine-tuning.

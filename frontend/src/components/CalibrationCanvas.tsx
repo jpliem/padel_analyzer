@@ -2,12 +2,13 @@ import React, { useRef, useState, useEffect, useCallback } from 'react';
 
 interface Props {
   videoFile: File | null;
+  videoUrl?: string;
   corners: number[][];
   onCornerClick: (x: number, y: number) => void;
   onReset: () => void;
 }
 
-const CalibrationCanvas: React.FC<Props> = ({ videoFile, corners, onCornerClick, onReset }) => {
+const CalibrationCanvas: React.FC<Props> = ({ videoFile, videoUrl, corners, onCornerClick, onReset }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const [videoDims, setVideoDims] = useState({ w: 1280, h: 720 });
@@ -78,10 +79,12 @@ const CalibrationCanvas: React.FC<Props> = ({ videoFile, corners, onCornerClick,
 
   // Load video and wait for first frame
   useEffect(() => {
-    if (!videoFile || !videoRef.current) return;
+    if ((!videoFile && !videoUrl) || !videoRef.current) return;
     setVideoReady(false);
     const video = videoRef.current;
-    video.src = URL.createObjectURL(videoFile);
+    video.crossOrigin = 'anonymous';
+    const source = videoFile ? URL.createObjectURL(videoFile) : videoUrl!;
+    video.src = source;
     video.onloadedmetadata = () => {
       setVideoDims({ w: video.videoWidth, h: video.videoHeight });
       video.currentTime = 0.1;
@@ -89,7 +92,8 @@ const CalibrationCanvas: React.FC<Props> = ({ videoFile, corners, onCornerClick,
     video.onseeked = () => {
       setVideoReady(true);
     };
-  }, [videoFile]);
+    return () => { if (videoFile) URL.revokeObjectURL(source); };
+  }, [videoFile, videoUrl]);
 
   // Redraw when video is ready OR corners change
   useEffect(() => {
@@ -110,7 +114,7 @@ const CalibrationCanvas: React.FC<Props> = ({ videoFile, corners, onCornerClick,
   return (
     <div style={{ position: 'relative', background: '#111', display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
       <video ref={videoRef} style={{ display: 'none' }} muted />
-      {videoFile ? (
+      {videoFile || videoUrl ? (
         <canvas ref={canvasRef} onClick={handleCanvasClick}
           style={{ maxWidth: '100%', maxHeight: '100%', cursor: 'crosshair' }} />
       ) : (
@@ -119,7 +123,7 @@ const CalibrationCanvas: React.FC<Props> = ({ videoFile, corners, onCornerClick,
           <div style={{ fontSize: 13 }}>First frame will be shown for corner selection</div>
         </div>
       )}
-      {videoFile && corners.length === 0 && (
+      {(videoFile || videoUrl) && corners.length === 0 && (
         <div style={{ position: 'absolute', top: 12, left: 12, padding: '6px 12px', background: 'rgba(0,0,0,0.7)', borderRadius: 6, color: 'white', fontSize: 12 }}>
           Click "Auto-Detect" or manually click 12 court keypoints
         </div>

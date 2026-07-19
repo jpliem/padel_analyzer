@@ -60,6 +60,26 @@ class CameraModel:
         self.homography: Optional[np.ndarray] = None  # fallback 2D homography
         self.inverse_homography: Optional[np.ndarray] = None
 
+    @classmethod
+    def from_parameters(cls, camera_matrix, rotation_world_to_camera,
+                        translation_world_to_camera, dist_coeffs=None):
+        """Build a camera model from known pinhole intrinsics/extrinsics.
+
+        Dataset and installed smart-court cameras often already provide a
+        calibrated ``K, R, t``. Re-solving PnP from clicked court landmarks
+        would discard that information and add avoidable error.
+        """
+        camera = cls()
+        camera.camera_matrix = np.asarray(camera_matrix, dtype=np.float64).reshape(3, 3)
+        rotation = np.asarray(rotation_world_to_camera, dtype=np.float64).reshape(3, 3)
+        camera.rvec, _ = cv2.Rodrigues(rotation)
+        camera.tvec = np.asarray(translation_world_to_camera, dtype=np.float64).reshape(3, 1)
+        if dist_coeffs is None:
+            camera.dist_coeffs = np.zeros(5, dtype=np.float64)
+        else:
+            camera.dist_coeffs = np.asarray(dist_coeffs, dtype=np.float64).reshape(-1)
+        return camera
+
     def calibrate(self, keypoints_2d: List[List[float]],
                   net_top_2d: Optional[List[List[float]]] = None,
                   image_width: int = 1280, image_height: int = 720) -> None:
@@ -87,7 +107,10 @@ class CameraModel:
             src = np.array(keypoints_2d[:n_ground], dtype=np.float32)
             dst = np.array(KEYPOINT_COURT_COORDS_12[:n_ground], dtype=np.float32)
             self.homography, _ = cv2.findHomography(src, dst)
-            self.inverse_homography, _ = cv2.findHomography(dst, src)
+            # Use the algebraic inverse of the accepted mapping. Fitting a
+            # second homography independently to noisy points does not produce
+            # an inverse and breaks court→pixel→court round trips.
+            self.inverse_homography = np.linalg.inv(self.homography)
 
         # Try full camera calibration if we have enough points
         if len(pts_3d) >= 6:
@@ -143,6 +166,14 @@ class CameraModel:
 
     def court_to_pixel(self, cx: float, cy: float, cz: float = 0.0) -> Tuple[float, float]:
         """Project 3D court point to pixel coordinates."""
+        # The ground homography is fitted directly to every ground keypoint and
+        # must be the inverse of project_to_ground.  A PnP pose inferred from
+        # coplanar points and guessed intrinsics is less accurate and is only
+        # needed once height is non-zero.
+        if abs(cz) < 1e-9 and self.inverse_homography is not None:
+            point = np.array([[[cx, cy]]], dtype=np.float32)
+            result = cv2.perspectiveTransform(point, self.inverse_homography)
+            return float(result[0][0][0]), float(result[0][0][1])
         if self.rvec is not None:
             pt_3d = np.array([[cx, cy, cz]], dtype=np.float64)
             pts_2d, _ = cv2.projectPoints(pt_3d, self.rvec, self.tvec,
@@ -165,6 +196,18 @@ class CameraModel:
         R, _ = cv2.Rodrigues(self.rvec)
         Rt = np.hstack([R, self.tvec.reshape(3, 1)])
         return self.camera_matrix @ Rt
+
+    def pixel_ray(self, px: float, py: float):
+        """Return ``(camera_origin, world_direction)`` for an image pixel."""
+        if self.camera_matrix is None or self.rvec is None or self.tvec is None:
+            raise RuntimeError("3D camera model is not calibrated")
+        R, _ = cv2.Rodrigues(self.rvec)
+        origin = (-R.T @ self.tvec.reshape(3, 1)).reshape(3)
+        pixel = np.array([px, py, 1.0], dtype=np.float64)
+        direction_camera = np.linalg.inv(self.camera_matrix) @ pixel
+        direction_world = R.T @ direction_camera
+        direction_world /= np.linalg.norm(direction_world)
+        return tuple(float(v) for v in origin), tuple(float(v) for v in direction_world)
 
     def _ray_plane_intersect(self, px: float, py: float, z_plane: float) -> Tuple[float, float]:
         """Cast a ray from pixel through camera and intersect with Z=z_plane."""

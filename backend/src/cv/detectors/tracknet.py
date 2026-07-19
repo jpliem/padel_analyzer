@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 import cv2
-from typing import Optional, List
+from typing import Dict, Optional, List
 from cv.detectors.base import BallDetector
 from cv.detectors.device import get_device
 
@@ -193,29 +193,49 @@ class TrackNetBallDetector(BallDetector):
         self._yolo_fallback = yolo_fallback
 
     def detect(self, frame: np.ndarray, frame_id: int = 0) -> Optional[List[float]]:
+        candidates = self.detect_candidates(frame, frame_id)
+        return candidates[0]["bbox"] if candidates else None
+
+    def detect_candidates(self, frame: np.ndarray, frame_id: int = 0,
+                          max_candidates: int = 5) -> List[Dict]:
+        """Return local heatmap peaks instead of silently choosing one object."""
         self._buffer.append(frame)
         if len(self._buffer) > self.N_INPUT_FRAMES:
             self._buffer.pop(0)
         if len(self._buffer) < self.N_INPUT_FRAMES:
             if self._yolo_fallback:
-                return self._yolo_fallback.detect(frame, frame_id)
-            return None
+                fallback = self._yolo_fallback.detect(frame, frame_id)
+                return ([{"bbox": fallback, "confidence": 0.5, "source": "yolo_fallback"}]
+                        if fallback is not None else [])
+            return []
 
         heatmap = self._infer(self._buffer)
-        peak_conf, peak_y, peak_x = self._find_peak(heatmap)
-
-        if peak_conf >= self._conf_threshold:
-            frame_h, frame_w = frame.shape[:2]
-            scale_x = frame_w / self.HEATMAP_W
-            scale_y = frame_h / self.HEATMAP_H
+        peaks = self._find_peaks(heatmap, self._conf_threshold, max_candidates)
+        frame_h, frame_w = frame.shape[:2]
+        scale_x = frame_w / self.HEATMAP_W
+        scale_y = frame_h / self.HEATMAP_H
+        candidates = []
+        for peak_conf, peak_y, peak_x in peaks:
             cx = peak_x * scale_x
             cy = peak_y * scale_y
             radius = 10
-            return [cx - radius, cy - radius, cx + radius, cy + radius]
+            candidates.append({
+                "bbox": [cx - radius, cy - radius, cx + radius, cy + radius],
+                "confidence": peak_conf,
+                "source": "tracknet",
+            })
+        if candidates:
+            return candidates
 
         if self._yolo_fallback:
-            return self._yolo_fallback.detect(frame, frame_id)
-        return None
+            fallback = self._yolo_fallback.detect(frame, frame_id)
+            return ([{"bbox": fallback, "confidence": 0.5, "source": "yolo_fallback"}]
+                    if fallback is not None else [])
+        return []
+
+    def reset(self) -> None:
+        """Clear temporal history before a seek or a discontinuous clip."""
+        self._buffer.clear()
 
     def warm_up(self) -> None:
         dummy = [np.zeros((self.HEATMAP_H, self.HEATMAP_W, 3), dtype=np.uint8)] * self.N_INPUT_FRAMES
@@ -257,3 +277,23 @@ class TrackNetBallDetector(BallDetector):
         peak_y, peak_x = np.unravel_index(peak_idx, smoothed.shape)
         peak_conf = float(smoothed[peak_y, peak_x])
         return peak_conf, peak_y, peak_x
+
+    @staticmethod
+    def _find_peaks(heatmap: np.ndarray, threshold: float,
+                    max_candidates: int = 5, suppression_radius: int = 12):
+        smoothed = cv2.GaussianBlur(heatmap, (5, 5), 2.0)
+        working = smoothed.copy()
+        peaks = []
+        for _ in range(max_candidates):
+            peak_idx = working.argmax()
+            peak_y, peak_x = np.unravel_index(peak_idx, working.shape)
+            confidence = float(working[peak_y, peak_x])
+            if confidence < threshold:
+                break
+            peaks.append((confidence, int(peak_y), int(peak_x)))
+            y1 = max(0, peak_y - suppression_radius)
+            y2 = min(working.shape[0], peak_y + suppression_radius + 1)
+            x1 = max(0, peak_x - suppression_radius)
+            x2 = min(working.shape[1], peak_x + suppression_radius + 1)
+            working[y1:y2, x1:x2] = 0.0
+        return peaks

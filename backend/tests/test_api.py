@@ -210,3 +210,59 @@ class TestMultiCameraEndpoints:
     def test_court_model_overrides_nonexistent_match(self, client):
         resp = client.post("/match/doesnotexist/court-model", json={"back_wall_height": 3.5})
         assert resp.status_code == 404
+
+
+class TestHardening:
+    """Production hardening: identifier validation, deletion semantics."""
+
+    def _create_match(self, client):
+        resp = client.post("/match/setup", json={
+            "match_name": "Hardening Match",
+            "players": {"P1": "A", "P2": "B", "P3": "C", "P4": "D"},
+            "teams": {"1": ["P1", "P2"], "2": ["P3", "P4"]},
+        })
+        return resp.json()["match_id"]
+
+    def test_match_id_with_dotdot_rejected(self, client):
+        resp = client.get("/match/has..dots")
+        assert resp.status_code == 400
+
+    def test_match_id_with_slash_encoded_rejected(self, client):
+        resp = client.get("/match/%2e%2e%2fescape")
+        assert resp.status_code in (400, 404)
+
+    def test_template_id_traversal_rejected(self, client):
+        resp = client.get("/templates/..%2fconfig")
+        assert resp.status_code in (400, 404)
+
+    def test_delete_missing_match_returns_404(self, client):
+        resp = client.delete("/match/nonexistent0")
+        assert resp.status_code == 404
+
+    def test_delete_existing_match(self, client):
+        match_id = self._create_match(client)
+        resp = client.delete(f"/match/{match_id}")
+        assert resp.status_code == 200
+        assert client.get(f"/match/{match_id}").status_code == 404
+
+
+class TestShutdownCancelsAnalyses:
+    def test_shutdown_sets_cancel_on_active_analyzers(self, tmp_path, monkeypatch):
+        """Server shutdown must request cancellation of running analyses so the
+        process can exit gracefully instead of hanging on the analysis thread."""
+        import sys
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+        import main
+
+        class DummyAnalyzer:
+            cancel_requested = False
+
+        dummy = DummyAnalyzer()
+        monkeypatch.setattr(main, "DATA_DIR", str(tmp_path / "matches"))
+        main._active_analyzers["shutdown-test"] = dummy
+        try:
+            with TestClient(main.app):
+                pass  # exiting the context runs the shutdown event
+        finally:
+            main._active_analyzers.pop("shutdown-test", None)
+        assert dummy.cancel_requested is True
