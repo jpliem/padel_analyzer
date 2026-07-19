@@ -299,3 +299,62 @@ class TestAdaptersWith3DCamera:
         cam = CameraModel()  # uncalibrated
         assert cam.is_in_service_box(2.5, 8.0, "near_left") is True
         assert cam.is_in_service_box(2.5, 8.0, "near_right") is False
+
+
+# ---------------------------------------------------------------------------
+# Reprojection error
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def calibrated_camera():
+    """Alias for calibrated_3d_camera — full 3D model with 12+2 keypoints."""
+    cam = CameraModel()
+    keypoints_2d = [
+        [100, 680],
+        [1180, 680],
+        [280, 500],
+        [640, 500],
+        [1000, 500],
+        [240, 400],
+        [1040, 400],
+        [300, 310],
+        [640, 310],
+        [980, 310],
+        [380, 160],
+        [900, 160],
+    ]
+    net_top_2d = [
+        [230, 370],
+        [1050, 370],
+    ]
+    cam.calibrate(keypoints_2d, net_top_2d=net_top_2d, image_width=1280, image_height=720)
+    return cam
+
+
+def test_compute_reprojection_error(calibrated_camera):
+    # Use the same keypoints used for calibration — reprojection error should be low
+    keypoints_2d = [
+        [100, 680],
+        [1180, 680],
+        [280, 500],
+        [640, 500],
+        [1000, 500],
+        [240, 400],
+        [1040, 400],
+        [300, 310],
+        [640, 310],
+        [980, 310],
+        [380, 160],
+        [900, 160],
+    ]
+    error = calibrated_camera.compute_reprojection_error(keypoints_2d)
+    assert error is not None
+    assert error >= 0.0
+    assert error < 100.0
+
+
+def test_reprojection_error_uncalibrated():
+    cam = CameraModel()
+    error = cam.compute_reprojection_error([[100, 200]])
+    assert error is None
+58 -0

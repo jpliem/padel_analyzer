@@ -266,3 +266,42 @@ class TestShutdownCancelsAnalyses:
         finally:
             main._active_analyzers.pop("shutdown-test", None)
         assert dummy.cancel_requested is True
+
+
+class TestCalibrationQuality:
+    def _create_match(self, client):
+        resp = client.post("/match/setup", json={
+            "match_name": "Reproj Test",
+            "players": {"P1": "A", "P2": "B", "P3": "C", "P4": "D"},
+            "teams": {"1": ["P1", "P2"], "2": ["P3", "P4"]},
+            "golden_point": True,
+            "format": "best_of_3",
+        })
+        return resp.json()["match_id"]
+
+    def test_calibrate_returns_reprojection_error(self, client):
+        match_id = self._create_match(client)
+        keypoints = [
+            [100, 680], [1180, 680], [280, 500], [640, 500], [1000, 500],
+            [240, 400], [1040, 400], [300, 310], [640, 310], [980, 310],
+            [380, 160], [900, 160],
+        ]
+        resp = client.post(f"/match/{match_id}/calibrate", json={
+            "corners": keypoints,
+            "net_top_points": [[230, 370], [1050, 370]],
+            "image_width": 1280, "image_height": 720,
+        })
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "reprojection_error" in body
+        if body["mode"] == "3d":
+            assert body["reprojection_error"] is not None
+            assert 0.0 <= body["reprojection_error"] < 200.0
+
+    def test_calibrate_four_corners_reports_null_error(self, client):
+        match_id = self._create_match(client)
+        resp = client.post(f"/match/{match_id}/calibrate", json={
+            "corners": [[320, 700], [1600, 700], [1200, 200], [720, 200]],
+        })
+        assert resp.status_code == 200
+        assert "reprojection_error" in resp.json()

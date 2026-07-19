@@ -330,6 +330,7 @@ def calibrate_court(match_id: str, req: CalibrationRequest):
     )
 
     mode = "3d" if cam.has_3d() else ("12-keypoint" if n_points >= 12 else "4-corner")
+    reprojection_error = cam.compute_reprojection_error(req.corners)
 
     match_data = _load_match(match_id)
     match_data["calibration"] = cal.to_dict()
@@ -340,8 +341,10 @@ def calibrate_court(match_id: str, req: CalibrationRequest):
         "net_top_points": req.net_top_points,
         "mode": mode,
     }
+    match_data["reprojection_error"] = reprojection_error
     _save_match(match_id, match_data)
-    return {"status": "calibrated", "match_id": match_id, "mode": mode}
+    return {"status": "calibrated", "match_id": match_id, "mode": mode,
+            "reprojection_error": reprojection_error}
 
 
 @app.delete("/match/{match_id}/analysis")

@@ -36,6 +36,7 @@ const Calibration: React.FC = () => {
   const [netTopPoints, setNetTopPoints] = useState<number[][]>([]);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [reprojError, setReprojError] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [hasServerVideo, setHasServerVideo] = useState(false);
 
@@ -88,7 +89,8 @@ const Calibration: React.FC = () => {
     setSaving(true);
     setError(null);
     try {
-      await calibrate(id, keypoints, null, netTopPoints.length === 2 ? netTopPoints : null);
+      const result = await calibrate(id, keypoints, null, netTopPoints.length === 2 ? netTopPoints : null);
+      setReprojError(result.reprojection_error ?? null);
       if (videoFile) {
         await uploadVideo(id, videoFile);
       }
@@ -315,6 +317,21 @@ const Calibration: React.FC = () => {
         {saved && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: 12, background: '#f0fff4', border: '1px solid #00b894', borderRadius: 8 }}>
             <div style={{ fontSize: 13, color: '#00b894', fontWeight: 500 }}>Calibration saved!</div>
+            {reprojError !== null && (
+              <div style={{
+                padding: '6px 10px',
+                borderRadius: 4,
+                fontSize: 13,
+                background: reprojError < 10 ? '#d4edda' : reprojError < 20 ? '#fff3cd' : '#f8d7da',
+                color: reprojError < 10 ? '#155724' : reprojError < 20 ? '#856404' : '#721c24',
+              }}>
+                {reprojError < 10
+                  ? `Good calibration (${reprojError.toFixed(1)}px error)`
+                  : reprojError < 20
+                    ? `Calibration may be inaccurate (${reprojError.toFixed(1)}px error)`
+                    : `Poor calibration (${reprojError.toFixed(1)}px error) — results will be unreliable`}
+              </div>
+            )}
             <button className="btn btn-primary" onClick={() => navigate(`/match/${id}/analyze`)}>Analyze Video →</button>
             <button className="btn btn-outline" onClick={() => navigate(`/match/${id}/live`)}>Go Live →</button>
           </div>

@@ -53,8 +53,8 @@ export async function getMatch(id: string): Promise<MatchData> {
   return fetchJSON(`${API}/match/${id}`);
 }
 
-export async function calibrate(id: string, corners: number[][], netPoints?: number[][] | null, netTopPoints?: number[][] | null): Promise<void> {
-  await fetchJSON(`${API}/match/${id}/calibrate`, {
+export async function calibrate(id: string, corners: number[][], netPoints?: number[][] | null, netTopPoints?: number[][] | null): Promise<{ status: string; mode: string; reprojection_error: number | null }> {
+  return fetchJSON(`${API}/match/${id}/calibrate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({

@@ -31,6 +31,16 @@ class BallTracker:
         self._kf.Q = np.eye(4) * 0.1
         self._ground_ball_size: Optional[float] = 30.0  # Default ground ball size in pixels
 
+    def _is_valid_position(self, x: float, y: float, z: float) -> bool:
+        """Reject NaN and physically impossible court positions from the
+        trajectory (a projection blow-up 30m+ from court centre is noise)."""
+        import math
+        if math.isnan(x) or math.isnan(y) or math.isnan(z):
+            return False
+        if (x - 5) ** 2 + (y - 10) ** 2 > 900:
+            return False
+        return True
+
     def update(self, bbox: Optional[List[float]], frame_number: int) -> Optional[Dict]:
         timestamp = frame_number * self.dt
         if bbox is not None:
@@ -59,7 +69,8 @@ class BallTracker:
             pos = {"x": float(self._kf.x[0]), "y": float(self._kf.x[1]),
                    "z": z, "speed": speed, "timestamp": timestamp,
                    "frame": frame_number, "detected": True}
-            self.trajectory.append(pos)
+            if self._is_valid_position(pos["x"], pos["y"], pos["z"]):
+                self.trajectory.append(pos)
             return pos
         else:
             if not self._initialized:
@@ -75,7 +86,8 @@ class BallTracker:
             self._prev_court_pos = (court_x, court_y)
             pos = {"x": court_x, "y": court_y, "z": 0.0, "speed": speed,
                    "timestamp": timestamp, "frame": frame_number, "detected": False}
-            self.trajectory.append(pos)
+            if self._is_valid_position(pos["x"], pos["y"], pos["z"]):
+                self.trajectory.append(pos)
             return pos
 
     def _to_court(self, cx: float, cy: float, z: float) -> tuple:

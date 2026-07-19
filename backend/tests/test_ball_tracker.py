@@ -114,3 +114,48 @@ class TestCameraModelCompatibility:
         pos = tracker.update(bbox=[500, 400, 520, 420], frame_number=0)
         assert pos is not None
         assert "x" in pos and "y" in pos
+class TestValidPosition:
+    def test_nan_x_rejected(self, tracker):
+        assert tracker._is_valid_position(float("nan"), 5.0, 0.0) is False
+
+    def test_nan_y_rejected(self, tracker):
+        assert tracker._is_valid_position(5.0, float("nan"), 0.0) is False
+
+    def test_nan_z_rejected(self, tracker):
+        assert tracker._is_valid_position(5.0, 10.0, float("nan")) is False
+
+    def test_out_of_bounds_rejected(self, tracker):
+        # 100m away from court center — clearly wrong
+        assert tracker._is_valid_position(105.0, 10.0, 0.0) is False
+
+    def test_valid_position_accepted(self, tracker):
+        # Court centre is (5, 10); a typical in-bounds point
+        assert tracker._is_valid_position(5.0, 10.0, 0.5) is True
+
+    def test_nan_position_not_appended_to_trajectory(self, tracker, monkeypatch):
+        """When calibration returns NaN coords, trajectory should stay empty."""
+
+        def nan_projection(px, py):
+            return float("nan"), float("nan")
+
+        # Patch whichever projection method the calibration object exposes
+        for method in ("pixel_to_court", "project_to_ground", "project_to_height"):
+            if hasattr(tracker.calibration, method):
+                monkeypatch.setattr(tracker.calibration, method, nan_projection)
+        tracker.update(bbox=[500, 400, 520, 420], frame_number=0)
+        assert len(tracker.trajectory) == 0
+
+    def test_out_of_bounds_position_not_appended_to_trajectory(self, tracker, monkeypatch):
+        """When calibration returns wildly wrong coords, trajectory should stay empty."""
+
+        def oob_projection(px, py):
+            return 999.0, 999.0
+
+        for method in ("pixel_to_court", "project_to_ground", "project_to_height"):
+            if hasattr(tracker.calibration, method):
+                monkeypatch.setattr(tracker.calibration, method, oob_projection)
+        tracker.update(bbox=[500, 400, 520, 420], frame_number=0)
+        assert len(tracker.trajectory) == 0
+
+
+44 -0

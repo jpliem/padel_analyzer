@@ -285,6 +285,27 @@ class CameraModel:
         x1, x2, y1, y2 = boxes[box]
         return x1 <= x <= x2 and y1 <= y <= y2
 
+    def compute_reprojection_error(self, keypoints_2d) -> Optional[float]:
+        """Mean reprojection error in pixels for the clicked keypoints.
+
+        Surfaces calibration quality at click time: a large value means the
+        corner clicks disagree with the fitted camera and every downstream
+        position will inherit that error."""
+        if self.rvec is None or self.tvec is None:
+            return None
+        n = min(len(keypoints_2d), len(GROUND_KEYPOINTS_3D))
+        if n == 0:
+            return None
+        pts_3d = np.array(GROUND_KEYPOINTS_3D[:n], dtype=np.float64)
+        pts_2d = np.array(keypoints_2d[:n], dtype=np.float64)
+        projected, _ = cv2.projectPoints(
+            pts_3d, self.rvec, self.tvec,
+            self.camera_matrix, self.dist_coeffs,
+        )
+        projected = projected.reshape(-1, 2)
+        errors = np.sqrt(np.sum((projected - pts_2d) ** 2, axis=1))
+        return float(np.mean(errors))
+
     def has_3d(self) -> bool:
         """Whether full 3D camera model is available (vs fallback homography)."""
         return self.rvec is not None

@@ -309,13 +309,20 @@ class VideoAnalyzer:
         self.scoring_engine = self.event_detector._scoring_engine
         self.all_events.extend(events)
 
-        # Log player positions per frame (lightweight: just court coords)
+        # Log player positions per frame (lightweight: just court coords).
+        # Drop degenerate projections: (0,0) means a failed transform, and
+        # positions far outside the court are noise; a padel court holds 4.
+        valid_players = [
+            p for p in player_pos
+            if not (p["x"] == 0 and p["y"] == 0)
+            and -5 <= p["x"] <= 15 and -5 <= p["y"] <= 25
+        ][:4]
         self.player_positions_log.append({
             "frame": frame_no,
             "players": [
                 {"track_id": p["track_id"], "x": p["x"], "y": p["y"],
                  "player_id": self.player_tracker.get_player_id(p["track_id"])}
-                for p in player_pos
+                for p in valid_players
             ],
             "poses": [
                 {"bbox": pose.bbox, "keypoints": pose.keypoints,
