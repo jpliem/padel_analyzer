@@ -47,7 +47,7 @@ npm start                       # Dev server on http://localhost:3000
 ```
 video ─▶ ball detector (TrackNet) ─▶ active-ball gate ─▶ Kalman track
                                                         │
-        players (YOLO + ReID) ──────────────────────────┤
+        players (YOLO + OSNet re-ID) ───────────────────┤
         audio impulses ─────────────────────────────────┤
                                                         ▼
         monocular ballistic fit (gravity-constrained z) │
@@ -55,6 +55,10 @@ video ─▶ ball detector (TrackNet) ─▶ active-ball gate ─▶ Kalman trac
         event detectors ─▶ semantic bridge ─▶ padel rules engine
                                                         ▼
         review ledger (human-gated scoring) ─▶ API ─▶ React dashboard
+
+after analysis (optional, never scores):
+        results ─▶ VLM track audit (crop ─▶ point ─▶ distance-in-code)
+                   └▶ disagreement frames ─▶ labeling queue ─▶ retrain data
 ```
 
 - `backend/src/cv/` — detectors (pluggable via `detector_type`: `tracknet`, `yolo`, `fast`), trackers, calibration, monocular 3D trajectory fitting.
